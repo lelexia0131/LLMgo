@@ -1,0 +1,5 @@
+const {spawnSync} = require('node:child_process')
+const path = require('node:path')
+const python = process.env.LLMGO_PYTHON || path.resolve('.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
+const result = spawnSync(python, ['-m', 'PyInstaller', '--noconfirm', '--onedir', '--name', 'llmgo-core', '--distpath', 'dist/core-build', '--workpath', '.runtime/pyinstaller', '--specpath', '.runtime', '--paths', '.', '--collect-all', 'agents', '--recursive-copy-metadata', 'openai-agents', 'scripts/core_entry.py'], {stdio: 'inherit'})
+process.exit(result.status ?? 1)
