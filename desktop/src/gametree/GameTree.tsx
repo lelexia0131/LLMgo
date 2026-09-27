@@ -32,7 +32,7 @@ export function GameTree({game, disabled, onNavigate, onComment}: {
     const byId = new Map(game.nodes.map(node => [node.id, node]))
     const positions = new Map<string, {x: number; y: number}>()
     let row = 0
-    const pending = [{id: game.nodes[0].id, depth: 0, branch: false}]
+    const pending = game.nodes[0].children.map((id, i) => ({id, depth: 0, branch: i > 0})).reverse()
     while (pending.length) {
       const item = pending.pop()!
       if (item.branch) row++
@@ -40,17 +40,17 @@ export function GameTree({game, disabled, onNavigate, onComment}: {
       const node = byId.get(item.id)!
       for (let i = node.children.length - 1; i >= 0; i--) pending.push({id: node.children[i], depth: item.depth + 1, branch: i > 0})
     }
-    return {positions, width: 66 + row * 42, height: Math.max(...Array.from(positions.values(), p => p.y)) + 54}
+    return {positions, width: 66 + row * 42, height: Math.max(12, ...Array.from(positions.values(), p => p.y)) + 54}
   }, [game.nodes])
   return <section className="tree-section" ref={section}>
-    <div className="section-heading"><h3>变化树</h3><span>{game.nodes.length} 节点</span></div>
+    <div className="section-heading"><h3>变化树</h3><span>{layout.positions.size} 节点</span></div>
     <div className="tree-list" role="tree" aria-label="棋谱变化树" inert={disabled}>
       <div className="tree-graph" style={{width: layout.width, height: layout.height}}>
-        <svg width={layout.width} height={layout.height} aria-hidden="true">{game.nodes.flatMap(node => node.children.map(id => {
+        <svg width={layout.width} height={layout.height} aria-hidden="true">{game.nodes.filter(node => layout.positions.has(node.id)).flatMap(node => node.children.map(id => {
           const a = layout.positions.get(node.id)!, b = layout.positions.get(id)!
           return <path key={id} d={`M${a.x + 15},${a.y + 15} V${b.y - 7} H${b.x + 15} V${b.y + 15}`}/>
         }))}</svg>
-        {game.nodes.map(node => <TreeNode key={node.id} node={node} {...layout.positions.get(node.id)!} active={node.id === game.node_id} loss={game.move_losses[node.id]} onNavigate={onNavigate}/>)}
+        {game.nodes.filter(node => layout.positions.has(node.id)).map(node => <TreeNode key={node.id} node={node} {...layout.positions.get(node.id)!} active={node.id === game.node_id} loss={game.move_losses[node.id]} onNavigate={onNavigate}/>)}
       </div>
     </div>
     <Splitter label="调整注释区域高度" vertical reverse value={visibleCommentHeight} min={28} max={Math.max(28, height - 150)} onChange={setCommentHeight}/>

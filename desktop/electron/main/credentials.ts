@@ -4,10 +4,9 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 export async function loadCredential(directory: string): Promise<string> {
-  if (process.env.OPENAI_API_KEY) return process.env.OPENAI_API_KEY
   try {return safeStorage.decryptString(await fs.readFile(path.join(directory, 'openai-key.enc')))}
   catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return ''
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return process.env.OPENAI_API_KEY || ''
     throw new Error('已保存的 API Key 无法解密，请检查当前 Windows 用户')
   }
 }

@@ -33,6 +33,7 @@ export function App() {
   const [engine, setEngine] = useState('启动中')
   const running = useRef(false)
   const analysisTicket = useRef(0)
+  const analysisRun = useRef<{revision: number; completed: boolean} | null>(null)
   const accept = useCallback((context: GameContext) => {
     // Keep the tree's transport projection stable during ordinary navigation.
     const previous = current.current
@@ -41,10 +42,13 @@ export function App() {
   }, [])
   const clear = () => {setAnalysis(null); setPreview(null)}
   const stopAnalysis = useCallback(async (clearResult = true) => {
-    analysisTicket.current += 1; setAnalyzing(false)
+    const ticket = ++analysisTicket.current
+    setAnalyzing(false)
+    if (clearResult || !analysisRun.current?.completed) analysisRun.current = null
     if (clearResult) {setAnalysis(null); setPreview(null)}
     await invoke('stopAnalysis')
-    accept(await invoke<GameContext>('state'))
+    const context = await invoke<GameContext>('state')
+    if (ticket === analysisTicket.current) accept(context)
   }, [accept])
   const perform = useCallback(async (fn: () => Promise<void>) => {
     if (running.current) return
@@ -77,28 +81,44 @@ export function App() {
     const result = await invoke<{filename: string} | null>(as ? 'saveAs' : 'save')
     if (result) {setNotice(`已保存 ${result.filename}`); accept(await invoke<GameContext>('state'))}
   })
-  const navigate = useCallback((direction: string, node_id?: string) => {void perform(async () => {
-    await stopAnalysis(); setAnalysis(null); setPreview(null)
-    accept(await invoke<GameContext>('navigate', {direction, node_id}))
-  })}, [accept, perform, stopAnalysis])
+  const navigate = useCallback((direction: string, node_id?: string) => {
+    if (preferences?.sound_enabled) prepareStoneSound()
+    void perform(async () => {
+      const previous = current.current
+      await stopAnalysis(); setAnalysis(null); setPreview(null)
+      const context = await invoke<GameContext>('navigate', {direction, node_id})
+      accept(context)
+      const target = context.nodes.find(node => node.id === context.node_id)
+      if (preferences?.sound_enabled && previous && previous.game_id === context.game_id && previous.node_id !== context.node_id
+        && context.move_number > previous.move_number && target?.move && target.move.coordinate.toLowerCase() !== 'pass') {
+        let ancestor = target.parent_id
+        while (ancestor !== null && ancestor !== previous.node_id) ancestor = context.nodes.find(node => node.id === ancestor)!.parent_id
+        if (ancestor === previous.node_id) playStoneSound()
+      }
+    })
+  }, [accept, perform, stopAnalysis, preferences?.sound_enabled])
   const analyze = useCallback(async () => {
     if (!current.current || running.current) return
-    await stopAnalysis()
     const snapshot = current.current
     const ticket = ++analysisTicket.current
-    setAnalyzing(true); setError('')
+    analysisRun.current = {revision: snapshot.revision, completed: false}
+    setAnalyzing(true); setAnalysis(null); setPreview(null); setError('')
     try {
+      await invoke('stopAnalysis')
+      if (ticket !== analysisTicket.current || current.current?.revision !== snapshot.revision) return
       const result = await invoke<AnalysisResult | {cancelled: true}>('analyze', {revision: snapshot.revision})
       if (ticket !== analysisTicket.current || current.current?.revision !== snapshot.revision || 'cancelled' in result) return
+      // Publishing candidate markers advances revision too; that revision is already analyzed.
+      analysisRun.current = {revision: result.context.revision, completed: true}
       accept(result.context); setAnalysis(result.analysis)
-    } catch (e) {if (ticket === analysisTicket.current) {setError((e as Error).message); setAuto(false)}}
+    } catch (e) {if (ticket === analysisTicket.current) setError((e as Error).message)}
     finally {if (ticket === analysisTicket.current) setAnalyzing(false)}
-  }, [accept, stopAnalysis])
+  }, [accept])
   useEffect(() => {
-    if (!auto || !game || busy || preview) return
+    if (!auto || !game || busy || preview || settings || analyzing || analysisRun.current?.revision === game.revision) return
     const timer = window.setTimeout(() => void analyze(), 250)
     return () => window.clearTimeout(timer)
-  }, [auto, game?.game_id, game?.node_id, busy, !!preview, analyze])
+  }, [auto, game?.game_id, game?.revision, busy, !!preview, settings, analyzing, analyze])
   const toggleAnalysis = () => {setAuto(value => !value); if (auto) void stopAnalysis()}
   const play = (coordinate: string) => {
     if (coordinate !== 'pass' && preferences?.sound_enabled) prepareStoneSound()
@@ -108,7 +128,7 @@ export function App() {
       if (!snapshot) return
       const result = await invoke<{context: GameContext; created: boolean}>('play', {coordinate, revision: snapshot.revision})
       accept(result.context); clear()
-      if (result.created && coordinate !== 'pass' && preferences?.sound_enabled) playStoneSound()
+      if (result.context.node_id !== snapshot.node_id && result.context.move_number > snapshot.move_number && coordinate !== 'pass' && preferences?.sound_enabled) playStoneSound()
     })
   }
   const changeNumbers = (mode: NumberMode) => {
@@ -129,7 +149,6 @@ export function App() {
     if (current.current) accept(await invoke<GameContext>('comment', {text, revision: current.current.revision}))
   })
   const showPreview = (id: number, full = false) => perform(async () => {
-    setAuto(false)
     await stopAnalysis(false)
     if (current.current) setPreview(await invoke<Preview>('preview', {revision: current.current.revision, marker_id: id, full}))
   })

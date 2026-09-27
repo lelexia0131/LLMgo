@@ -138,16 +138,22 @@ def test_game_form_metadata(properties, label):
 def test_provider_transport_and_persistence(tmp_path, provider, url, model_type):
     settings = SettingsService(tmp_path)
     settings.api_key = 'private-test-key'
-    settings.update(Settings(provider=provider, base_url=url, openai_model='test-model'))
     adapter = LLMProvider(settings)
+    model = 'deepseek-chat' if provider == 'deepseek' else 'test-model'
     async def check():
+        async with adapter.client():
+            pass
+        settings.update(Settings(provider=provider, base_url=url, openai_model=model))
         async with adapter.client() as client:
             assert str(client.base_url).rstrip('/') == url
             assert isinstance(adapter.model(client), model_type)
+            assert adapter.model(client).model == model
+            assert client.api_key == settings.api_key
     asyncio.run(check())
     assert 'private-test-key' not in str(settings.public())
     assert 'private-test-key' not in settings.store.path.read_text()
-    assert SettingsService(tmp_path).value.provider == provider
+    restored = SettingsService(tmp_path).value
+    assert (restored.provider, restored.base_url, restored.openai_model) == (provider, url, model)
 
 
 def test_engine_initialization_idempotence_shutdown_and_move_loss():
@@ -209,3 +215,21 @@ def test_engine_overrides_preserve_original_config(tmp_path, backend, key):
     assert 'numSearchThreadsPerAnalysisThread = 4' in text
     assert 'numSearchThreads = 8' not in text
     assert f'{key} = 1' in text
+
+
+def test_provider_errors_preserve_details_without_credentials(tmp_path):
+    import httpx2
+    from openai import APIConnectionError, AuthenticationError
+    from backend.services.agent_service import AgentService
+    settings = SettingsService(tmp_path)
+    settings.api_key = 'private-test-key'
+    service = AgentService(None, settings)
+    request = httpx2.Request('POST', 'https://api.deepseek.com/chat/completions')
+    error = AuthenticationError('rejected', response=httpx2.Response(401, request=request),
+                                body={'message': f'Invalid API key: {settings.api_key}'})
+    message = service.error_message(error)
+    assert 'HTTP 401' in message and 'Invalid API key' in message
+    assert settings.api_key not in message
+    error = APIConnectionError(request=request)
+    error.__cause__ = OSError('connection refused')
+    assert 'connection refused' in service.error_message(error)

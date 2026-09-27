@@ -1,6 +1,7 @@
 import asyncio
+import re
 from agents import Runner, RunConfig
-from openai import AsyncOpenAI, OpenAIError
+from openai import AsyncOpenAI, OpenAIError, APIConnectionError, APIStatusError
 from backend.agent.schemas import AgentReply, TeacherAnswer
 from backend.agent.teacher import create_teacher
 from backend.agent.tools import TeachingContext
@@ -38,8 +39,7 @@ class AgentService:
                 return AgentReply(answer=answer, current_markers=context.game.markers,
                                   tool_calls=context.calls, preview=context.preview)
         except OpenAIError as exc:
-            # Never forward request headers or credentials to the renderer.
-            raise ValueError(f'LLM 请求失败（{type(exc).__name__}），请检查 Provider、Key、模型和网络') from None
+            raise ValueError(self.error_message(exc)) from None
         finally:
             self.tasks.discard(task)
 
@@ -48,7 +48,23 @@ class AgentService:
             async with self.client() as client:
                 return await self.provider.test(client)
         except OpenAIError as exc:
-            raise ValueError(f'LLM 请求失败（{type(exc).__name__}），请检查 Provider、Key、模型和网络') from None
+            raise ValueError(self.error_message(exc)) from None
+
+    def error_message(self, exc: OpenAIError) -> str:
+        detail = str(exc)
+        if isinstance(exc, APIStatusError) and isinstance(exc.body, dict):
+            body = exc.body.get('error', exc.body)
+            if isinstance(body, dict):
+                detail = str(body.get('message', detail))
+        if isinstance(exc, APIConnectionError) and exc.__cause__:
+            detail += f' {type(exc.__cause__).__name__}: {exc.__cause__}'
+        # Keep the useful API/network error, never the configured key or URL credentials.
+        if self.settings.api_key:
+            detail = detail.replace(self.settings.api_key, '[已隐藏]')
+        detail = re.sub(r'(?i)Bearer\s+[^\s,;\'"}]+', 'Bearer [已隐藏]', detail)
+        detail = re.sub(r'(https?://)[^/\s@]+@', r'\1[已隐藏]@', detail)
+        status = f' HTTP {exc.status_code}' if isinstance(exc, APIStatusError) else ''
+        return f'LLM 请求失败（{self.settings.value.provider} · {type(exc).__name__}{status}）：{detail[:800]}'
 
     async def close(self) -> None:
         tasks = list(self.tasks)
