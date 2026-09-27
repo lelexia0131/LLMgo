@@ -71,10 +71,11 @@ else {
         return result.filePaths[0] || null
       }
       if (action === 'credential') {
-        const key = await promptCredential()
-        if (key === null) return {cancelled: true}
+        const key = await promptCredential(window!)
+        if (key === null) return {saved: false}
         await saveCredential(directory, key)
-        return core.request('POST', '/settings/credential', {api_key: key})
+        await core.request('POST', '/settings/credential', {api_key: key})
+        return {saved: true}
       }
       throw new Error('不支持的操作')
     })

@@ -1,5 +1,4 @@
-import {safeStorage} from 'electron'
-import {spawn} from 'node:child_process'
+import {BrowserWindow, safeStorage} from 'electron'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -18,43 +17,51 @@ export async function saveCredential(directory: string, key: string) {
   await fs.writeFile(target, safeStorage.encryptString(key))
 }
 
-export async function promptCredential(): Promise<string | null> {
-  if (process.platform !== 'win32') throw new Error('此版本的原生密钥窗口支持 Windows；其他平台请设置 OPENAI_API_KEY 环境变量')
-  const script = `
-Add-Type -AssemblyName System.Windows.Forms
-$form = New-Object System.Windows.Forms.Form
-$form.Text = 'LLMgo - LLM API Key'
-$form.Size = New-Object System.Drawing.Size(490,175)
-$form.StartPosition = 'CenterScreen'
-$form.TopMost = $true
-$label = New-Object System.Windows.Forms.Label
-$label.Text = 'LLM API Key (stored encrypted for this Windows user)'
-$label.SetBounds(18,16,450,25)
-$box = New-Object System.Windows.Forms.TextBox
-$box.UseSystemPasswordChar = $true
-$box.SetBounds(18,47,440,25)
-$ok = New-Object System.Windows.Forms.Button
-$ok.Text = 'Save'
-$ok.SetBounds(275,88,85,28)
-$ok.DialogResult = [System.Windows.Forms.DialogResult]::OK
-$cancel = New-Object System.Windows.Forms.Button
-$cancel.Text = 'Cancel'
-$cancel.SetBounds(373,88,85,28)
-$cancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
-$form.Controls.AddRange(@($label,$box,$ok,$cancel))
-$form.AcceptButton = $ok
-$form.CancelButton = $cancel
-if ($form.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-  [Console]::Write($box.Text)
-  exit 0
-}
-exit 2
-`
-  return new Promise((resolve, reject) => {
-    const child = spawn('powershell.exe', ['-NoProfile', '-STA', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {windowsHide: true})
-    let secret = ''
-    child.stdout.on('data', data => {secret += data.toString()})
-    child.on('error', () => reject(new Error('无法打开系统凭据窗口')))
-    child.on('close', code => code === 0 ? resolve(secret.trim()) : code === 2 ? resolve(null) : reject(new Error('系统凭据窗口异常退出')))
-  })
+let credentialWindow: BrowserWindow | undefined
+let pendingCredential: Promise<string | null> | undefined
+
+export function promptCredential(parent: BrowserWindow): Promise<string | null> {
+  if (pendingCredential) {
+    credentialWindow?.show()
+    credentialWindow?.focus()
+    return pendingCredential
+  }
+  pendingCredential = new Promise<string | null>((resolve, reject) => {
+    let child: BrowserWindow | undefined
+    let settled = false
+    const finish = (key: string | null, error?: Error) => {
+      if (settled) return
+      settled = true
+      if (error) reject(error)
+      else resolve(key)
+      if (child && !child.isDestroyed()) child.destroy()
+    }
+    try {
+      child = new BrowserWindow({parent, modal: true, width: 490, height: 230, resizable: false, show: false,
+        title: 'API Key', titleBarStyle: 'hidden', titleBarOverlay: true,
+        webPreferences: {preload: path.join(__dirname, '../preload/index.js'), contextIsolation: true, nodeIntegration: false, sandbox: true}})
+      credentialWindow = child
+      child.setMenu(null)
+      child.on('close', () => finish(null))
+      child.on('closed', () => finish(null))
+      child.on('unresponsive', () => finish(null, new Error('凭据窗口没有响应，请重试')))
+      child.webContents.on('render-process-gone', () => finish(null, new Error('凭据窗口异常退出')))
+      child.webContents.setWindowOpenHandler(() => ({action: 'deny'}))
+      child.webContents.on('will-navigate', event => event.preventDefault())
+      child.webContents.on('ipc-message', (event, channel, key: unknown) => {
+        if (channel !== 'llmgo:credential' || event.senderFrame !== child?.webContents.mainFrame) return
+        if (key === null || typeof key === 'string') finish(key === null ? null : key.trim())
+      })
+      const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'none'">
+<style>body{font:14px system-ui;margin:40px 24px 24px}input{box-sizing:border-box;width:100%;margin:12px 0;padding:8px}footer{text-align:right}button{margin-left:8px;padding:6px 20px}</style>
+<form id="credential-form"><label for="api-key">API Key（仅为当前用户加密保存）</label>
+<input id="api-key" type="password" autocomplete="off" autofocus>
+<footer><button id="credential-cancel" type="button">取消</button><button type="submit">保存</button></footer></form></html>`
+      void child.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).then(() => {
+        if (!settled) {child!.show(); child!.focus()}
+      }).catch(() => finish(null, new Error('无法打开凭据窗口')))
+    } catch {finish(null, new Error('无法打开凭据窗口'))}
+  }).finally(() => {credentialWindow = undefined; pendingCredential = undefined})
+  return pendingCredential
 }
