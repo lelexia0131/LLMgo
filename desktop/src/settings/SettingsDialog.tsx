@@ -5,7 +5,7 @@ import type {Settings} from '../api/types'
 export type SettingsTab = 'engine' | 'api' | 'interface'
 const tabs: Record<SettingsTab, string> = {engine: '引擎设置', api: 'AI / API 设置', interface: '界面设置'}
 const presets = {openai: {base_url: 'https://api.openai.com/v1', openai_model: 'gpt-5.6'}, deepseek: {base_url: 'https://api.deepseek.com', openai_model: 'deepseek-chat'}, compatible: {base_url: 'http://localhost:8000/v1', openai_model: ''}}
-export function SettingsDialog({initialTab, onClose, onSaved}: {initialTab: SettingsTab; onClose: () => void; onSaved: (value: Settings) => void}) {
+export function SettingsDialog({initialTab, numbers, onNumbers, beforeSave, onClose, onSaved}: {initialTab: SettingsTab; numbers: Settings['move_number_mode']; onNumbers: (mode: Settings['move_number_mode']) => void; beforeSave: () => Promise<void>; onClose: () => void; onSaved: (value: Settings) => void}) {
   const [tab, setTab] = useState(initialTab)
   const [value, setValue] = useState<Settings | null>(null)
   const [health, setHealth] = useState<{katago: string; error: string; logs: string[]}>({katago: 'starting', error: '', logs: []})
@@ -23,7 +23,8 @@ export function SettingsDialog({initialTab, onClose, onSaved}: {initialTab: Sett
   }
   const save = async () => {
     if (!value) return
-    const saved = await invoke<Settings>('updateSettings', value)
+    await beforeSave()
+    const saved = await invoke<Settings>('updateSettings', {...value, move_number_mode: numbers})
     setValue(saved); onSaved(saved)
   }
   const choose = (key: 'katago_executable' | 'katago_model' | 'katago_config', kind: string) => action(async () => {
@@ -55,7 +56,10 @@ export function SettingsDialog({initialTab, onClose, onSaved}: {initialTab: Sett
         <p className="muted">密钥由系统窗口输入并加密保存；切换 Provider 后请设置对应服务的密钥。</p>
         <button disabled={busy} onClick={() => void action(async () => {await save(); const result = await invoke<{model: string}>('testOpenAI'); setMessage(`连接成功 · ${result.model}`)})}>测试连接</button>
       </>}
-      {tab === 'interface' && <label>落子音效<select value={String(value.sound_enabled)} onChange={e => setValue({...value, sound_enabled: e.target.value === 'true'})}><option value="true">开</option><option value="false">关</option></select></label>}
+      {tab === 'interface' && <>
+        <label>手数显示<select value={numbers} disabled={busy} onChange={e => onNumbers(e.target.value as Settings['move_number_mode'])}><option value="off">关闭</option><option value="latest">最新</option><option value="all">全部</option></select></label>
+        <label>落子音效<select value={String(value.sound_enabled)} disabled={busy} onChange={e => setValue({...value, sound_enabled: e.target.value === 'true'})}><option value="true">开</option><option value="false">关</option></select></label>
+      </>}
       <div className="dialog-actions"><button className="primary" disabled={busy} onClick={() => void action(async () => {await save(); setMessage('设置已保存')})}>保存设置</button></div>
     </>}
     {(message || busy) && <div className="settings-message" role="status">{busy ? '正在处理…' : message}</div>}

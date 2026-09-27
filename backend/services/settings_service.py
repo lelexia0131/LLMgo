@@ -18,6 +18,7 @@ class Settings(BaseModel):
     provider: Literal['openai', 'deepseek', 'compatible'] = 'openai'
     base_url: str = 'https://api.openai.com/v1'
     sound_enabled: bool = True
+    move_number_mode: Literal['off', 'latest', 'all'] = 'off'
     engine_threads: int = Field(default=0, ge=0, le=256)
     engine_gpu: int = Field(default=-1, ge=-1, le=32)
 

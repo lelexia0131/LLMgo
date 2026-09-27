@@ -61,6 +61,16 @@ def test_existing_move_navigation_and_new_edit_clears_redo():
     assert game.context().node_id != first.node_id
 
 
+def test_move_number_settings_persist_and_validate(tmp_path):
+    settings = SettingsService(tmp_path)
+    assert settings.value.move_number_mode == 'off'
+    for mode in ('latest', 'all', 'off'):
+        settings.update(settings.value.model_copy(update={'move_number_mode': mode}))
+        assert SettingsService(tmp_path).value.move_number_mode == mode
+    with pytest.raises(ValueError):
+        Settings(move_number_mode='invalid')
+
+
 def test_numbering_after_110_passes_setup_and_captures():
     game = GameService()
     moves = ''.join(';B[]' if i % 2 == 0 else ';W[]' for i in range(110))

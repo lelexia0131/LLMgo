@@ -38,7 +38,7 @@ else {
       if (action in endpoints) {
         if (action === 'updateSettings') {
           const input = body as Record<string, unknown>
-          body = Object.fromEntries(['katago_executable', 'katago_model', 'katago_config', 'visits', 'openai_model', 'provider', 'base_url', 'sound_enabled', 'engine_threads', 'engine_gpu'].map(k => [k, input[k]]))
+          body = Object.fromEntries(['katago_executable', 'katago_model', 'katago_config', 'visits', 'openai_model', 'provider', 'base_url', 'sound_enabled', 'move_number_mode', 'engine_threads', 'engine_gpu'].map(k => [k, input[k]]))
         }
         const [method, endpoint] = endpoints[action]
         return core.request(method, endpoint, body)
@@ -79,6 +79,12 @@ else {
       throw new Error('不支持的操作')
     })
     const emit = (action: string) => () => window?.webContents.send('llmgo:menu', action)
+    window.webContents.on('before-input-event', (event, input) => {
+      if (input.key === 'F4' && !input.alt && !input.control && !input.meta && !input.shift) {
+        event.preventDefault()
+        if (input.type === 'keyDown' && !input.isAutoRepeat) emit('toggleNumbers')()
+      }
+    })
     Menu.setApplicationMenu(Menu.buildFromTemplate([
       {label: '文件', submenu: [{label: '打开 SGF', accelerator: 'CmdOrCtrl+O', click: emit('open')}, {label: '保存', accelerator: 'CmdOrCtrl+S', click: emit('save')}, {label: '另存为', accelerator: 'CmdOrCtrl+Shift+S', click: emit('saveAs')}, {type: 'separator'}, {role: 'quit', label: '退出'}]},
       {label: '分析', submenu: [{label: '分析当前局面', accelerator: 'F5', click: emit('analyze')}, {label: '启动/停止分析', accelerator: 'F6', click: emit('toggleAnalysis')}]},

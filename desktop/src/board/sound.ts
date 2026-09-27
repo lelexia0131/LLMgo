@@ -1,19 +1,21 @@
 let audio: AudioContext | undefined
+let sample: Promise<AudioBuffer> | undefined
+
+// Resume inside the click gesture, before awaiting the SGF edit IPC round trip.
+export function prepareStoneSound() {
+  audio ??= new AudioContext()
+  void audio.resume().catch(() => undefined)
+  sample ??= fetch(new URL('../../../assets/stone.mp3', import.meta.url).href)
+    .then(response => response.arrayBuffer()).then(bytes => audio!.decodeAudioData(bytes))
+  void sample.catch(() => {sample = undefined})
+}
 
 export function playStoneSound() {
-  audio ??= new AudioContext()
-  void audio.resume().then(() => {
-    if (!audio) return
-    const oscillator = audio.createOscillator()
-    const gain = audio.createGain()
-    const time = audio.currentTime
-    oscillator.type = 'triangle'
-    oscillator.frequency.setValueAtTime(950, time)
-    oscillator.frequency.exponentialRampToValueAtTime(180, time + .055)
-    gain.gain.setValueAtTime(.22, time)
-    gain.gain.exponentialRampToValueAtTime(.001, time + .065)
-    oscillator.connect(gain); gain.connect(audio.destination)
-    oscillator.start(time); oscillator.stop(time + .07)
-    oscillator.onended = () => {oscillator.disconnect(); gain.disconnect()}
+  void sample?.then(buffer => {
+    const source = audio!.createBufferSource()
+    source.buffer = buffer
+    source.connect(audio!.destination)
+    source.start()
+    source.onended = () => source.disconnect()
   }).catch(() => undefined)
 }

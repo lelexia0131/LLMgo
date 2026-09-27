@@ -64,7 +64,9 @@ flowchart LR
 - 导航、打开棋谱、落子、变更引擎都会递增 revision 并清空标记。
 - 提问复制当前局面及 `current_markers`；沿用本问题已引用目标的编号，工具只在快照内追加空闲编号，上限五个。提问完成后同步回棋盘。
 - API 请求必须携带 revision，拒绝过期标记；操作锁避免导航、分析、设置同时修改同一会话。
-- PV 数字是另一个视图的手顺，页面明确显示“候选 N 的变化”，退出预览恢复原标记；默认五手，用户请求完整变化后才扩展。
+- PV 数字是另一个视图的手顺，棋盘内浮动按钮标示 PV 预览，退出预览恢复原推荐叠加层；默认五手，用户请求完整变化后才扩展。
+- 推荐胜率/目差通过独立的无指针事件叠加层绘制到 Shudan 交叉点；右键调用原有 PV 接口，左键始终提交真实落子。候选色阶与变化树共享颜色表，使用当前行棋方视角的 `max(candidate.score_lead) - candidate.score_lead`，下限为零。
+- 手数模式由 Settings 的 `move_number_mode` 持久化；F4 和界面设置更新同一 Renderer 状态并串行写入 Settings。
 - 推荐编号只用于分析证据；真实手数由 SGF 路径推导。全局证据不能推导单块棋的确定死活。
 - 撤销记录是序列化 SGF 快照、节点 ID 序列和 current node，不维护第二棵棋谱树。正常编辑保留原节点 ID，Renderer 复用树投影及 keyed DOM。
 - Provider 共用同一个 TeacherAgent / 工具 / 证据逻辑；OpenAI 使用 Responses，DeepSeek 与兼容服务使用 Chat Completions。兼容服务最终 JSON 由本地 schema 验证，不要求服务端支持 strict structured output。

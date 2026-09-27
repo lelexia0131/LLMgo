@@ -21,6 +21,7 @@ export interface Settings {
   katago_executable: string; katago_model: string; katago_config: string; visits: number; openai_model: string
   has_api_key: boolean; engines: Engine[]
   provider: 'openai' | 'deepseek' | 'compatible'; base_url: string; sound_enabled: boolean
+  move_number_mode: 'off' | 'latest' | 'all'
   engine_threads: number; engine_gpu: number
 }
 declare global {

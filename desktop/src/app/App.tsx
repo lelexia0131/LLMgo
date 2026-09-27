@@ -3,10 +3,11 @@ import {invoke} from '../api/client'
 import type {Analysis, AnalysisResult, GameContext, Preview, Reply, Settings} from '../api/types'
 import {Board, nextNumberMode, type NumberMode} from '../board/Board'
 import {GameTree} from '../gametree/GameTree'
-import {Candidates, percent, score} from '../analysis/Candidates'
+import {percent, score} from '../analysis/evaluation'
 import {Teacher, type Conversation} from '../teacher/Teacher'
 import {SettingsDialog, type SettingsTab} from '../settings/SettingsDialog'
-import {playStoneSound} from '../board/sound'
+import {playStoneSound, prepareStoneSound} from '../board/sound'
+import {Splitter} from './Splitter'
 
 export function App() {
   const [game, setGame] = useState<GameContext | null>(null)
@@ -14,11 +15,16 @@ export function App() {
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
   const [history, setHistory] = useState<Conversation[]>([])
   const [preview, setPreview] = useState<Preview | null>(null)
-  const [numbers, setNumbers] = useState<NumberMode>('off')
+  const [preferences, setPreferences] = useState<Settings | null>(null)
+  const numberMode = useRef<NumberMode>('off')
+  const settingsWrites = useRef(Promise.resolve())
+  const numbers = preferences?.move_number_mode || 'off'
   const [settings, setSettings] = useState<SettingsTab | null>(null)
   const [left, setLeft] = useState(true)
   const [right, setRight] = useState(true)
-  const [sound, setSound] = useState(true)
+  const [leftWidth, setLeftWidth] = useState(224)
+  const [rightWidth, setRightWidth] = useState(330)
+  const [recordHeight, setRecordHeight] = useState(125)
   const [busy, setBusy] = useState(false)
   const [analyzing, setAnalyzing] = useState(false)
   const [auto, setAuto] = useState(false)
@@ -34,8 +40,9 @@ export function App() {
     current.current = context; setGame(context)
   }, [])
   const clear = () => {setAnalysis(null); setPreview(null)}
-  const stopAnalysis = useCallback(async () => {
+  const stopAnalysis = useCallback(async (clearResult = true) => {
     analysisTicket.current += 1; setAnalyzing(false)
+    if (clearResult) {setAnalysis(null); setPreview(null)}
     await invoke('stopAnalysis')
     accept(await invoke<GameContext>('state'))
   }, [accept])
@@ -49,7 +56,7 @@ export function App() {
   useEffect(() => {
     void perform(async () => {
       accept(await invoke<GameContext>('state'))
-      const value = await invoke<Settings>('settings'); setSound(value.sound_enabled)
+      const value = await invoke<Settings>('settings'); setPreferences(value); numberMode.current = value.move_number_mode
       void invoke('startEngine').catch(e => setError(String(e)))
     })
     const poll = async () => {
@@ -88,19 +95,30 @@ export function App() {
     finally {if (ticket === analysisTicket.current) setAnalyzing(false)}
   }, [accept, stopAnalysis])
   useEffect(() => {
-    if (!auto || !game || busy) return
+    if (!auto || !game || busy || preview) return
     const timer = window.setTimeout(() => void analyze(), 250)
     return () => window.clearTimeout(timer)
-  }, [auto, game?.game_id, game?.node_id, busy, analyze])
+  }, [auto, game?.game_id, game?.node_id, busy, !!preview, analyze])
   const toggleAnalysis = () => {setAuto(value => !value); if (auto) void stopAnalysis()}
-  const play = (coordinate: string) => perform(async () => {
-    await stopAnalysis()
-    const snapshot = current.current
-    if (!snapshot) return
-    const result = await invoke<{context: GameContext; created: boolean}>('play', {coordinate, revision: snapshot.revision})
-    accept(result.context); clear()
-    if (result.created && coordinate !== 'pass' && sound) playStoneSound()
-  })
+  const play = (coordinate: string) => {
+    if (coordinate !== 'pass' && preferences?.sound_enabled) prepareStoneSound()
+    return perform(async () => {
+      await stopAnalysis()
+      const snapshot = current.current
+      if (!snapshot) return
+      const result = await invoke<{context: GameContext; created: boolean}>('play', {coordinate, revision: snapshot.revision})
+      accept(result.context); clear()
+      if (result.created && coordinate !== 'pass' && preferences?.sound_enabled) playStoneSound()
+    })
+  }
+  const changeNumbers = (mode: NumberMode) => {
+    numberMode.current = mode
+    setPreferences(value => value ? {...value, move_number_mode: mode} : value)
+    settingsWrites.current = settingsWrites.current.then(async () => {
+      const value = await invoke<Settings>('settings')
+      await invoke<Settings>('updateSettings', {...value, move_number_mode: mode})
+    }).catch(e => setError(String(e)))
+  }
   const edit = (action: string) => perform(async () => {
     await stopAnalysis()
     if (!current.current) return
@@ -111,7 +129,8 @@ export function App() {
     if (current.current) accept(await invoke<GameContext>('comment', {text, revision: current.current.revision}))
   })
   const showPreview = (id: number, full = false) => perform(async () => {
-    await stopAnalysis()
+    setAuto(false)
+    await stopAnalysis(false)
     if (current.current) setPreview(await invoke<Preview>('preview', {revision: current.current.revision, marker_id: id, full}))
   })
   const ask = (text: string) => perform(async () => {
@@ -127,6 +146,7 @@ export function App() {
   })
   useEffect(() => {
     const handle = (action: string) => {
+      if (action === 'toggleNumbers') {if (preferences) changeNumbers(nextNumberMode(numberMode.current)); return}
       if (action === 'toggleAnalysis') {toggleAnalysis(); return}
       if (running.current || settings) return
       if (action === 'open') void open()
@@ -152,25 +172,26 @@ export function App() {
     if (file) void perform(async () => {await stopAnalysis(); const context = await window.llmgo.openDropped(file); if (context) {accept(context); clear(); setHistory([])}})
   }}>
     {(error || notice) && <div className={`banner ${error ? 'error' : ''}`} role="alert"><span>{error || notice}</span><button aria-label="关闭提示" onClick={() => {setError(''); setNotice('')}}>×</button></div>}
-    {game ? <main className={`workspace ${left ? '' : 'left-collapsed'} ${right ? '' : 'right-collapsed'}`}>
+    {game ? <main className={`workspace ${left ? '' : 'left-collapsed'} ${right ? '' : 'right-collapsed'}`} style={{gridTemplateColumns: `${left ? `${leftWidth}px 6px` : ''} minmax(0,1fr) ${right ? `6px ${rightWidth}px` : ''}`}}>
       <aside className="game-panel" hidden={!left}>
+        <div className="record-info" style={{height: recordHeight}}>
         <div className="record-title"><span className="eyebrow">棋谱工作台</span><h2>{game.filename || '新的棋局'}</h2><span>{game.metadata.DT || ''}</span></div>
-        <div className="players"><div><i className="stone-dot"/><span><small>黑方</small><b>{game.metadata.PB || '未知'}</b></span></div><div><i className="stone-dot white"/><span><small>白方</small><b>{game.metadata.PW || '未知'}</b></span></div></div>
-        <div className="game-meta"><span>{game.board_state.size} 路</span><span>贴 {game.metadata.KM || '7.5'} 目</span><span>{game.metadata.RU || '中国规则'}</span><span>{game.metadata.game_form}</span>{game.metadata.RE && <span>{game.metadata.RE}</span>}</div>
+        <div className="game-meta"><span>贴 {game.metadata.KM || '7.5'} 目</span><span>{game.metadata.RU || '中国规则'}</span><span>{game.metadata.game_form}</span>{game.metadata.RE && <span>{game.metadata.RE}</span>}</div>
+        </div>
+        <Splitter label="调整棋局信息高度" vertical value={recordHeight} min={0} max={260} onChange={setRecordHeight}/>
         <GameTree game={game} disabled={busy} onNavigate={navigate} onComment={text => void comment(text)}/>
-        <div className="drop-hint">拖入 .sgf 文件打开棋谱</div>
       </aside>
+      {left && <Splitter label="调整棋谱栏宽度" value={leftWidth} min={180} max={360} onChange={setLeftWidth}/>}
       <section className="board-panel">
-        <div className="board-heading"><button className="sidebar-toggle" aria-label={left ? '折叠棋谱栏' : '展开棋谱栏'} onClick={() => setLeft(!left)}>{left ? '‹' : '›'}</button><div><span className="eyebrow">{preview ? 'KataGo 变化预览' : '当前局面'}</span><h1>第 {game.move_number} 手<span>{game.to_play === 'B' ? '黑棋行棋' : '白棋行棋'}</span></h1></div><button className="sidebar-toggle" aria-label={right ? '折叠 AI 栏' : '展开 AI 栏'} onClick={() => setRight(!right)}>{right ? '›' : '‹'}</button></div>
-        <div className="board-options"><button disabled={!!preview} onClick={() => setNumbers(nextNumberMode(numbers))}>手数：{({off: '关闭', latest: '最新', all: '全部'})[numbers]}</button><button disabled={busy} onClick={() => void analyze()}>分析当前局面</button><button onClick={toggleAnalysis}>{auto ? '停止分析' : '启动分析'}</button><span>{analyzing ? '分析中…' : ''}</span></div>
-        <Board game={game} preview={preview} busy={busy} numbers={numbers} onPoint={c => void play(c)}/>
-        {preview ? <div className="preview-bar"><span>预览手顺，不写入棋谱</span><button onClick={() => setPreview(null)}>返回当前局面</button></div>
-          : <div className="navigation"><button aria-label="第一手" disabled={busy} onClick={() => navigate('first')}>|‹</button><button aria-label="前一手" disabled={busy} onClick={() => navigate('previous')}>‹</button><span>第 <b>{game.move_number}</b> 手</span><button aria-label="后一手" disabled={busy} onClick={() => navigate('next')}>›</button><button aria-label="最后一手" disabled={busy} onClick={() => navigate('last')}>›|</button><button className="pass" disabled={busy} onClick={() => void play('pass')}>停一手</button></div>}
-        <Candidates game={game} analysis={analysis} disabled={busy} onPreview={id => void showPreview(id)}/>
+        <button className="sidebar-toggle sidebar-toggle-left" aria-label={left ? '折叠棋谱栏' : '展开棋谱栏'} onClick={() => setLeft(!left)}>{left ? '‹' : '›'}</button>
+        <button className="sidebar-toggle sidebar-toggle-right" aria-label={right ? '折叠 AI 栏' : '展开 AI 栏'} onClick={() => setRight(!right)}>{right ? '›' : '‹'}</button>
+        <Board game={game} analysis={analysis} preview={preview} busy={busy} numbers={numbers} onPoint={c => void play(c)} onPreview={id => void showPreview(id)} onExitPreview={() => setPreview(null)}/>
+        <div className="navigation"><button aria-label="第一手" disabled={busy} onClick={() => navigate('first')}>|‹</button><button aria-label="前一手" disabled={busy} onClick={() => navigate('previous')}>‹</button><span>第 <b>{game.move_number}</b> 手</span><button aria-label="后一手" disabled={busy} onClick={() => navigate('next')}>›</button><button aria-label="最后一手" disabled={busy} onClick={() => navigate('last')}>›|</button><button className="pass" disabled={busy || !!preview} onClick={() => void play('pass')}>停一手</button></div>
       </section>
+      {right && <Splitter label="调整 AI 栏宽度" reverse value={rightWidth} min={240} max={420} onChange={setRightWidth}/>}
       <Teacher history={history} busy={busy} hidden={!right} onAsk={text => void ask(text)}/>
     </main> : <div className="loading">正在连接 Python Core…</div>}
-    <footer className="statusbar"><span><i className={`status-dot ${engine === '就绪' ? '' : 'idle'}`}/>KataGo {engine}</span><span>第 {game?.move_number || 0} 手</span><span>目差 {analysis ? score(analysis.score_lead) : '—'}</span><span>胜率 {analysis ? percent(analysis.winrate) : '—'}</span><span>Visits {analysis?.visits ?? '—'}</span><span className="status-right">{analysis ? `${analysis.perspective === 'B' ? '黑' : '白'}方视角` : ''}</span></footer>
-    {settings && <SettingsDialog initialTab={settings} onClose={() => setSettings(null)} onSaved={value => {setSound(value.sound_enabled); clear(); void invoke<GameContext>('state').then(accept).catch(e => setError(String(e)))}}/>}
+    <footer className="statusbar"><span><i className={`status-dot ${engine === '就绪' ? '' : 'idle'}`}/>KataGo {analyzing ? '分析中…' : auto ? `${engine} · 自动` : engine}</span><span>第 {game?.move_number || 0} 手</span><span>目差 {analysis ? score(analysis.score_lead) : '—'}</span><span>胜率 {analysis ? percent(analysis.winrate) : '—'}</span><span>Visits {analysis?.visits ?? '—'}</span><span className="status-right">{analysis ? `${analysis.perspective === 'B' ? '黑' : '白'}方视角` : ''}</span></footer>
+    {settings && <SettingsDialog initialTab={settings} numbers={numbers} onNumbers={changeNumbers} beforeSave={() => settingsWrites.current} onClose={() => setSettings(null)} onSaved={value => {setPreferences(value); numberMode.current = value.move_number_mode; clear(); void invoke<GameContext>('state').then(accept).catch(e => setError(String(e)))}}/>}
   </div>
 }

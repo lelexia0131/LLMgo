@@ -22,16 +22,16 @@ npm run dev
 ## 使用
 
 1. 从原生“文件”菜单打开 SGF，或拖入棋谱；仓库附带 `samples/teaching.sgf`。
-2. 左右方向键、底部导航和真实变化树均可切换节点；两侧无边框箭头折叠侧栏，棋盘自动适配。
+2. 左右方向键、底部导航和真实变化树均可切换节点；两侧无边框箭头折叠侧栏，拖动边界调整栏宽；左栏两条横向分隔线调整棋局信息与注释高度，变化树占用其余空间。棋盘自动适配。
 3. 点击合法空点直接落子。相同后续节点会被复用，不同落点追加 variation；“停一手”写入 pass。
-4. 手数按钮循环“关闭 / 最新 / 全部”。pass 计数，setup 不编号；新旧棋子使用相同规则。
+4. F4 循环“关闭 / 最新 / 全部”，也可在“界面设置 → 手数显示”立即修改并持久化。pass 计数，setup 不编号；新旧棋子使用相同规则。
 5. 在“棋谱注释”编辑当前 C[] 并保存注释。“编辑”菜单支持撤销、重做、删除当前节点及其后续、删除当前所在分支。
 6. APP 启动即后台初始化 KataGo。“引擎设置”选择 executable、model、config、backend、GPU、threads 和 visits，可重启并查看日志。GPU / threads 默认沿用原配置；覆盖值写入用户数据目录中的派生配置，不改原文件。
-7. F5 分析当前局面；F6 启停跟随节点的自动分析。KataGo 推荐编号仅是分析结果，点击推荐卡预览 PV，棋盘实际点击才写入 SGF。
+7. F5 分析当前局面；F6 启停跟随节点的自动分析。KataGo 推荐在交叉点直接显示胜率与目差，颜色使用相对最优候选的目差损失；左键推荐点仍为真实落子，右键预览 PV。分析与 PV 切换保持棋盘尺寸不变。
 8. “AI / API 设置”支持 OpenAI、DeepSeek、OpenAI Compatible，可修改 Base URL 和 Model，使用原生凭据窗口配置 Key，再测试连接。
 9. 右栏保留对话历史；每个问题基于当前局面独立查询证据，历史项标注手数和对应推荐坐标，不提供跨局面模型记忆。
 
-原生菜单支持 Ctrl+O / Ctrl+S / Ctrl+Shift+S、Ctrl+Z / Ctrl+Shift+Z。聊天 Enter 发送，Shift+Enter 换行。用户新增落子才播放音效，可在“界面设置”关闭。
+原生菜单支持 Ctrl+O / Ctrl+S / Ctrl+Shift+S、Ctrl+Z / Ctrl+Shift+Z。聊天 Enter 发送，Shift+Enter 换行。用户新增落子才异步播放真实落子采样（pass、导航和 PV 无声），可在“界面设置”关闭。音频来源及 MIT 许可见 [stone.SOURCE.md](assets/stone.SOURCE.md)。侧栏宽度在当前会话内保留。
 
 首次 OpenCL 初始化可能进行 GPU 调优；引擎只有在真实搜索完成后才显示“就绪”。初始化不阻塞 Renderer 或打开棋谱。
 
@@ -46,7 +46,7 @@ Windows 原生密码窗口由 Electron Main 打开，Renderer 无密钥输入框
 ## 实现范围
 
 - Electron / React / TypeScript strict / Vite 三栏桌面界面。
-- Shudan 棋盘：坐标、星位、棋子、最后一手、手数、hover、点击、数字候选及 PV。
+- Shudan 棋盘：坐标、星位、棋子、最后一手、手数、hover、点击、胜率/目差候选叠加层及 PV。
 - sgfmill 负责 SGF 解析、树结构、摆子、提子及序列化；保留 variations 和原始属性。支持 19/13/9 路，包含 SZ/PB/PW/BR/WR/KM/RU/RE/DT/HA/AB/AW/B/W/C。
 - Python Game / GameNode / Move / BoardState / GameContext；中途 SGF 摆子重建有效引擎历史。
 - 明确分离 KataGoProcess、KataGoClient、AnalysisService；请求路由、队列、取消、超时、schema 验证；128 项内存缓存。
@@ -85,9 +85,9 @@ $env:LLMGO_TEST_EXE = (Resolve-Path release/win-unpacked/LLMgo.exe).Path
 npm run test:desktop
 ```
 
-定向桌面测试覆盖 19 路棋盘、三态手数、真实落子/变化、导航 DOM 复用、设置和真实 KataGo，结束自动清理临时数据；真实 Agent 单独验收仍输出 `.runtime/real-smoke-report.json`。`VALIDATION.md` 保留历史版本验收记录，不代表本次结果。
+定向桌面测试覆盖三态手数/F4 键盘事件、采样播放、落子/变化、导航 DOM 复用、设置持久化、横纵拖动、推荐叠加层、真实 KataGo/F5/F6 和分析/PV 前后棋盘尺寸；结束自动清理临时数据；真实 Agent 单独验收仍输出 `.runtime/real-smoke-report.json`。`VALIDATION.md` 保留历史版本验收记录，不代表本次结果。
 
-正式图标位于 `assets/app.svg`、`app.png` 和多尺寸 `app.ico`；可在 Windows 用 `scripts/build-icon.ps1` 重建。窗口、任务栏、exe 和 NSIS 图标配置共用 ICO。`npm run package` 只打包独立文件夹；安装包可在 core 与前端构建完成后运行 `npx electron-builder --win nsis`。
+金黄色背景的正式图标位于 `assets/app.svg`、`app.png` 和多尺寸 `app.ico`；可在 Windows 用 `scripts/build-icon.ps1` 重建。窗口、任务栏、exe 和 NSIS 图标配置共用 ICO。`npm run package` 只打包独立文件夹；安装包可在 core 与前端构建完成后运行 `npx electron-builder --win nsis`。
 
 ## 复用与研究
 
