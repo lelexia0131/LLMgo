@@ -1,6 +1,6 @@
 import {contextBridge, ipcRenderer, webUtils} from 'electron'
 
-const allowed = new Set(['state', 'health', 'navigate', 'select', 'clearMarkers', 'analyze', 'analyzeMarker', 'preview', 'ask', 'settings', 'updateSettings', 'testKatago', 'testOpenAI', 'open', 'save', 'saveAs', 'choosePath', 'credential'])
+const allowed = new Set(['state', 'health', 'navigate', 'play', 'edit', 'comment', 'startEngine', 'restartEngine', 'stopAnalysis', 'analyze', 'analyzeMarker', 'preview', 'ask', 'settings', 'updateSettings', 'testKatago', 'testOpenAI', 'open', 'save', 'saveAs', 'choosePath', 'credential'])
 contextBridge.exposeInMainWorld('llmgo', {
   invoke: (action: string, body?: unknown) => {
     if (!allowed.has(action)) return Promise.reject(new Error('不支持的操作'))

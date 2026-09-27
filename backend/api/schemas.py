@@ -19,8 +19,16 @@ class Revision(BaseModel):
     revision: int
 
 
-class SelectPoint(Revision):
+class PlayMove(Revision):
     coordinate: str
+
+
+class EditGame(Revision):
+    action: Literal['undo', 'redo', 'deleteNode', 'deleteBranch']
+
+
+class Comment(Revision):
+    text: str
 
 
 class MarkerRequest(Revision):

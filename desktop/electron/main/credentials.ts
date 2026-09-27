@@ -24,12 +24,12 @@ export async function promptCredential(): Promise<string | null> {
   const script = `
 Add-Type -AssemblyName System.Windows.Forms
 $form = New-Object System.Windows.Forms.Form
-$form.Text = 'LLMgo - OpenAI API Key'
+$form.Text = 'LLMgo - LLM API Key'
 $form.Size = New-Object System.Drawing.Size(490,175)
 $form.StartPosition = 'CenterScreen'
 $form.TopMost = $true
 $label = New-Object System.Windows.Forms.Label
-$label.Text = 'OpenAI API Key (stored encrypted for this Windows user)'
+$label.Text = 'LLM API Key (stored encrypted for this Windows user)'
 $label.SetBounds(18,16,450,25)
 $box = New-Object System.Windows.Forms.TextBox
 $box.UseSystemPasswordChar = $true

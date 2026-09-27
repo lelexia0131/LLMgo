@@ -1,6 +1,6 @@
 import asyncio
 from fastapi import APIRouter
-from backend.api.schemas import OpenGame, SaveGame, Navigate, Revision, SelectPoint, MarkerRequest, PreviewRequest, AskRequest, Credential
+from backend.api.schemas import OpenGame, SaveGame, Navigate, Revision, PlayMove, EditGame, Comment, MarkerRequest, PreviewRequest, AskRequest, Credential
 from backend.services.game_service import GameService
 from backend.services.file_service import FileService
 from backend.services.analysis_service import AnalysisService
@@ -14,10 +14,32 @@ def create_routes(game: GameService, files: FileService, analysis: AnalysisServi
                   agent: AgentService, settings: SettingsService) -> APIRouter:
     router = APIRouter()
     operation = asyncio.Lock()
+    searches: set[asyncio.Task] = set()
+
+    async def stop_searches() -> None:
+        for task in list(searches):
+            task.cancel()
+        await asyncio.gather(*list(searches), return_exceptions=True)
 
     @router.get('/health')
     def health() -> dict:
-        return {'ok': True, 'name': 'LLMgo', 'katago': 'running' if analysis.client.process.running else 'stopped'}
+        status = analysis.status
+        if status == 'ready' and not analysis.client.process.running:
+            status = 'error'
+        return {'ok': True, 'name': 'LLMgo', 'katago': status, 'error': analysis.error,
+                'logs': list(analysis.client.process.stderr)}
+
+    @router.post('/engine/start')
+    async def start_engine() -> dict:
+        analysis.initialize()
+        return health()
+
+    @router.post('/engine/restart')
+    async def restart_engine() -> dict:
+        await stop_searches()
+        await analysis.close()
+        analysis.initialize()
+        return health()
 
     @router.get('/game/state')
     def state() -> GameContext:
@@ -38,25 +60,47 @@ def create_routes(game: GameService, files: FileService, analysis: AnalysisServi
         async with operation:
             return game.navigate(body.direction, body.node_id)
 
-    @router.post('/game/select')
-    async def select(body: SelectPoint) -> GameContext:
+    @router.post('/game/play')
+    async def play(body: PlayMove) -> dict:
         async with operation:
-            return game.select(body.coordinate, body.revision)
+            context, created = game.play(body.coordinate, body.revision)
+            return {'context': context, 'created': created}
 
-    @router.post('/game/clear-markers')
-    async def clear(body: Revision) -> GameContext:
+    @router.post('/game/edit')
+    async def edit(body: EditGame) -> GameContext:
         async with operation:
-            game.check(body.revision)
-            game.reset_markers()
-            return game.context()
+            return game.edit(body.action, body.revision)
+
+    @router.post('/game/comment')
+    async def comment(body: Comment) -> GameContext:
+        async with operation:
+            return game.comment(body.text, body.revision)
+
+    @router.post('/analysis/stop')
+    async def stop_analysis() -> dict:
+        await stop_searches()
+        return {'ok': True}
 
     @router.post('/analysis/current')
     async def current(body: Revision) -> dict:
-        async with operation:
+        task = asyncio.current_task()
+        searches.add(task)
+        try:
             game.check(body.revision)
-            result = await analysis.analyze_position(game.context())
+            snapshot = game.context()
+            entry = game.adapter.entries[snapshot.node_id]
+            parent = game.adapter.context(body.revision, entry.parent_id) if entry.parent_id is not None and entry.move else None
+            result = await analysis.analyze_position(snapshot)
+            loss = await analysis.move_loss(parent, entry.move.coordinate) if parent and entry.move and entry.move.color == parent.to_play else None
+            game.check(body.revision)
+            if loss is not None:
+                game.move_losses[snapshot.node_id] = loss
             context = game.set_candidates([c.coordinate for c in result.candidates[:3]], body.revision)
             return {'analysis': result, 'context': context}
+        except asyncio.CancelledError:
+            return {'cancelled': True}
+        finally:
+            searches.discard(task)
 
     @router.post('/analysis/marker')
     async def marker(body: MarkerRequest) -> dict:
@@ -66,7 +110,7 @@ def create_routes(game: GameService, files: FileService, analysis: AnalysisServi
             target = next((m for m in context.markers if m.id == body.marker_id), None)
             if target is None:
                 raise ValueError('数字标记已失效')
-            result = await analysis.analyze_position(context) if target.role == 'stone' else await analysis.analyze_move(context, target.coordinate)
+            result = await analysis.analyze_move(context, target.coordinate)
             return {'analysis': result, 'context': context}
 
     @router.post('/analysis/preview')
@@ -85,8 +129,8 @@ def create_routes(game: GameService, files: FileService, analysis: AnalysisServi
         async with operation:
             game.check(body.revision)
             # Rebuild a fresh question context while preserving IDs referenced in the question.
-            game.revision += 1
             reply = await agent.ask(game.context(), body.question)
+            game.revision += 1
             game.markers = reply.current_markers
             return {'reply': reply, 'context': game.context()}
 
@@ -97,9 +141,16 @@ def create_routes(game: GameService, files: FileService, analysis: AnalysisServi
     @router.post('/settings')
     async def update_settings(body: Settings) -> dict:
         async with operation:
-            await analysis.close()
-            game.reset_markers()
-            return settings.update(body)
+            changed = any(getattr(body, key) != getattr(settings.value, key) for key in ('katago_executable', 'katago_model', 'katago_config', 'visits', 'engine_threads', 'engine_gpu'))
+            if changed:
+                await stop_searches()
+                await analysis.close()
+                game.reset_markers()
+                game.move_losses.clear()
+            result = settings.update(body)
+            if changed:
+                analysis.initialize()
+            return result
 
     @router.post('/settings/credential')
     async def credential(body: Credential) -> dict:
@@ -119,6 +170,7 @@ def create_routes(game: GameService, files: FileService, analysis: AnalysisServi
 
     @router.post('/shutdown')
     async def shutdown() -> dict:
+        await stop_searches()
         await agent.close()
         await analysis.close()
         return {'ok': True}

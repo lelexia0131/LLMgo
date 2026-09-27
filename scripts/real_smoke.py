@@ -42,11 +42,12 @@ async def main(openai: bool) -> None:
         assert variation['variation']['steps'][0]['coordinate'] == ctx.markers[1].coordinate
         game.reset_markers()
         free = next(f'{"ABCDEFGHJKLMNOPQRST"[x]}{19-y}' for y, row in enumerate(ctx.board_state.sign_map) for x, sign in enumerate(row) if sign == 0 and 3 <= x <= 15 and 3 <= y <= 15)
-        temporary = game.select(free, game.revision)
-        free_result = await analysis.analyze_move(temporary, temporary.markers[0].coordinate)
+        free_result = await analysis.analyze_move(game.context(), free)
         assert free_result.candidates[0].coordinate == free
+        played, created = game.play(free, game.revision)
+        assert created and played.move_number == ctx.move_number + 1
         report.update({'katago': 'passed', 'visits': result.visits, 'pid': pid, 'markers': [m.model_dump() for m in ctx.markers],
-                       'sdk_tools_real_katago': teaching.calls, 'temporary_marker': free, 'cache': 'passed'})
+                       'sdk_tools_real_katago': teaching.calls, 'played_move': free, 'cache': 'passed'})
         if openai:
             report['openai'] = await agent.test()
             reply = await agent.ask(ctx, '为什么 2 不好？请通过工具与首选比较，不要先入为主。')

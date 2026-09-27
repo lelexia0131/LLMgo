@@ -23,6 +23,7 @@ class KataGoProcess:
             '-override-config', f'reportAnalysisWinratesAs=BLACK,homeDataDir={directory.resolve().as_posix()}',
             '-quit-without-waiting', cwd=directory,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            limit=4 * 1024 * 1024,  # Empty 19x19 positions can return hundreds of PVs in one JSON line.
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
         self.stderr_task = asyncio.create_task(self._stderr())
 

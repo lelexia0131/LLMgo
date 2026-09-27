@@ -35,7 +35,8 @@
     "productName": "LLMgo",
     "directories": {"output": "release"},
     "files": ["dist/renderer/**/*", "dist/electron/**/*", "package.json"],
-    "extraResources": [{"from": "dist/core-build/llmgo-core", "to": "core"}],
-    "win": {"target": "dir", "signAndEditExecutable": false}
+    "extraResources": [{"from": "dist/core-build/llmgo-core", "to": "core"}, {"from": "assets", "to": "assets"}],
+    "win": {"target": ["dir", "nsis"], "icon": "assets/app.ico", "signAndEditExecutable": true},
+    "nsis": {"installerIcon": "assets/app.ico", "uninstallerIcon": "assets/app.ico", "installerHeaderIcon": "assets/app.ico"}
   }
 }

@@ -12,30 +12,30 @@ from backend.evidence.builder import build_evidence
 from backend.main import create_app
 
 
-def test_marker_coordinate_orientation_and_stale_revision():
+def test_play_coordinate_orientation_and_stale_revision():
     assert coordinate(11, 16, 19) == 'R12'
     assert point('R12', 19) == (11, 16)
     assert point('pass', 19) is None
     with pytest.raises(ValueError):
         point('I10', 19)
     game = GameService()
-    ctx = game.select('R12', 0)
-    assert ctx.markers[0].id == 1
-    assert ctx.markers[0].coordinate == 'R12'
+    ctx, created = game.play('R12', 0)
+    assert created and ctx.move_number == 1
+    assert ctx.board_state.sign_map[7][16] == 1
     with pytest.raises(ValueError):
-        game.select('Q10', 0)
+        game.play('Q10', 0)
     game.navigate('first')
     assert not game.context().markers
 
 
-def test_marker_limit_and_candidate_reset():
+def test_analysis_candidates_do_not_create_sgf_nodes():
     game = GameService()
-    for move in ['A1', 'B1', 'C1', 'D1', 'E1']:
-        game.select(move, game.revision)
-    with pytest.raises(ValueError):
-        game.select('F1', game.revision)
+    original = game.adapter.serialize()
     ctx = game.set_candidates(['R12', 'Q10', 'C6'], game.revision)
     assert [(m.id, m.coordinate) for m in ctx.markers] == [(1, 'R12'), (2, 'Q10'), (3, 'C6')]
+    assert game.adapter.serialize() == original
+    played, created = game.play('R12', game.revision)
+    assert created and not played.markers and played.move_number == 1
 
 
 def test_sgf_setup_variation_capture_and_roundtrip(tmp_path):
@@ -96,5 +96,5 @@ def test_api_auth_sgf_and_secret_redaction(tmp_path, monkeypatch):
         target = tmp_path / 'roundtrip.sgf'
         assert client.post('/game/save', json={'path': str(target)}).status_code == 200
         assert target.exists()
-        invalid = client.post('/game/select', json={'coordinate': 'I10', 'revision': state['revision']})
+        invalid = client.post('/game/play', json={'coordinate': 'I10', 'revision': state['revision']})
         assert invalid.status_code == 400

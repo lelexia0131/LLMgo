@@ -9,7 +9,8 @@ let window: BrowserWindow | undefined
 let closing = false
 const endpoints: Record<string, [string, string]> = {
   state: ['GET', '/game/state'], health: ['GET', '/health'], navigate: ['POST', '/game/navigate'],
-  select: ['POST', '/game/select'], clearMarkers: ['POST', '/game/clear-markers'],
+  play: ['POST', '/game/play'], edit: ['POST', '/game/edit'], comment: ['POST', '/game/comment'],
+  startEngine: ['POST', '/engine/start'], restartEngine: ['POST', '/engine/restart'], stopAnalysis: ['POST', '/analysis/stop'],
   analyze: ['POST', '/analysis/current'], analyzeMarker: ['POST', '/analysis/marker'],
   preview: ['POST', '/analysis/preview'], ask: ['POST', '/agent/ask'],
   settings: ['GET', '/settings'], updateSettings: ['POST', '/settings'],
@@ -17,6 +18,7 @@ const endpoints: Record<string, [string, string]> = {
 }
 
 app.setName('LLMgo')
+app.setAppUserModelId('app.llmgo.desktop')
 if (process.env.LLMGO_USER_DATA) app.setPath('userData', process.env.LLMGO_USER_DATA)
 if (!app.requestSingleInstanceLock()) app.quit()
 else {
@@ -27,7 +29,7 @@ else {
     const root = app.isPackaged ? process.resourcesPath : path.resolve(__dirname, '../../..')
     await core.start(root, directory, await loadCredential(directory))
     window = new BrowserWindow({width: 1480, height: 980, minWidth: 1120, minHeight: 760, show: false,
-      title: 'LLMgo', backgroundColor: '#f5f4ee',
+      title: 'LLMgo', backgroundColor: '#f5f4ee', icon: path.join(root, 'assets', 'app.ico'),
       webPreferences: {preload: path.join(__dirname, '../preload/index.js'), contextIsolation: true, nodeIntegration: false, sandbox: true}})
     window.webContents.setWindowOpenHandler(() => ({action: 'deny'}))
     window.webContents.on('will-navigate', event => event.preventDefault())
@@ -36,7 +38,7 @@ else {
       if (action in endpoints) {
         if (action === 'updateSettings') {
           const input = body as Record<string, unknown>
-          body = Object.fromEntries(['katago_executable', 'katago_model', 'katago_config', 'visits', 'openai_model'].map(k => [k, input[k]]))
+          body = Object.fromEntries(['katago_executable', 'katago_model', 'katago_config', 'visits', 'openai_model', 'provider', 'base_url', 'sound_enabled', 'engine_threads', 'engine_gpu'].map(k => [k, input[k]]))
         }
         const [method, endpoint] = endpoints[action]
         return core.request(method, endpoint, body)
@@ -79,9 +81,9 @@ else {
     const emit = (action: string) => () => window?.webContents.send('llmgo:menu', action)
     Menu.setApplicationMenu(Menu.buildFromTemplate([
       {label: '文件', submenu: [{label: '打开 SGF', accelerator: 'CmdOrCtrl+O', click: emit('open')}, {label: '保存', accelerator: 'CmdOrCtrl+S', click: emit('save')}, {label: '另存为', accelerator: 'CmdOrCtrl+Shift+S', click: emit('saveAs')}, {type: 'separator'}, {role: 'quit', label: '退出'}]},
-      {label: '分析', submenu: [{label: '分析当前局面', accelerator: 'F5', click: emit('analyze')}, {label: '清除标记', click: emit('clearMarkers')}]},
-      {label: '编辑', submenu: [{role: 'copy', label: '复制'}, {role: 'paste', label: '粘贴'}]},
-      {label: '设置', submenu: [{label: '引擎与 API', click: emit('settings')}]}
+      {label: '分析', submenu: [{label: '分析当前局面', accelerator: 'F5', click: emit('analyze')}, {label: '启动/停止分析', accelerator: 'F6', click: emit('toggleAnalysis')}]},
+      {label: '编辑', submenu: [{label: '撤销', accelerator: 'CmdOrCtrl+Z', click: emit('undo')}, {label: '重做', accelerator: 'CmdOrCtrl+Shift+Z', click: emit('redo')}, {type: 'separator'}, {label: '删除当前节点', click: emit('deleteNode')}, {label: '删除当前分支', click: emit('deleteBranch')}]},
+      {label: '设置', submenu: [{label: '引擎设置', click: emit('engineSettings')}, {label: 'AI / API 设置', click: emit('apiSettings')}, {label: '界面设置', click: emit('interfaceSettings')}]}
     ]))
     if (process.env.LLMGO_DEV_URL) await window.loadURL(process.env.LLMGO_DEV_URL)
     else await window.loadFile(path.join(__dirname, '../../renderer/index.html'))

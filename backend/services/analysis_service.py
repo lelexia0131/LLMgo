@@ -1,4 +1,5 @@
 import json
+import asyncio
 from sgfmill import boards
 from backend.domain.analysis import CandidateMove, PositionAnalysis, VariationPreview
 from backend.domain.context import GameContext
@@ -12,6 +13,36 @@ class AnalysisService:
         self.client = client
         self.settings = settings
         self.cache: dict[str, PositionAnalysis] = {}
+        self.status = 'stopped'
+        self.error = ''
+        self.startup: asyncio.Task | None = None
+
+    def initialize(self) -> None:
+        if self.startup and not self.startup.done():
+            return
+        if self.status == 'ready' and self.client.process.running:
+            return
+        self.status, self.error = 'starting', ''
+        self.startup = asyncio.create_task(self._initialize())
+
+    async def _initialize(self) -> None:
+        from backend.sgf.adapter import SGFAdapter
+        try:
+            # A completed search proves the model/backend is ready, unlike spawn alone.
+            await self.analyze_position(SGFAdapter().context(0))
+            self.status = 'ready'
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.status, self.error = 'error', str(exc)
+
+    async def move_loss(self, parent: GameContext, coordinate: str) -> float:
+        best = await self.analyze_position(parent)
+        played = next((c for c in best.candidates if c.coordinate.lower() == coordinate.lower()), None)
+        if played is None:
+            result = await self.analyze_move(parent, coordinate)
+            played = next(c for c in result.candidates if c.coordinate.lower() == coordinate.lower())
+        return max(0.0, max(c.score_lead for c in best.candidates) - played.score_lead)
 
     async def analyze_position(self, context: GameContext, allowed: list[str] | None = None) -> PositionAnalysis:
         paths = self.settings.engine_paths()
@@ -93,5 +124,10 @@ class AnalysisService:
         return VariationPreview(sign_map=signs, steps=steps)
 
     async def close(self) -> None:
+        if self.startup and not self.startup.done():
+            self.startup.cancel()
+            await asyncio.gather(self.startup, return_exceptions=True)
+        self.startup = None
         await self.client.close()
         self.cache.clear()
+        self.status = 'stopped'

@@ -1,114 +1,176 @@
 import {useCallback, useEffect, useRef, useState} from 'react'
 import {invoke} from '../api/client'
-import type {Analysis, AnalysisResult, GameContext, Preview, Reply} from '../api/types'
-import {Board} from '../board/Board'
+import type {Analysis, AnalysisResult, GameContext, Preview, Reply, Settings} from '../api/types'
+import {Board, nextNumberMode, type NumberMode} from '../board/Board'
 import {GameTree} from '../gametree/GameTree'
 import {Candidates, percent, score} from '../analysis/Candidates'
-import {Teacher} from '../teacher/Teacher'
-import {SettingsDialog} from '../settings/SettingsDialog'
+import {Teacher, type Conversation} from '../teacher/Teacher'
+import {SettingsDialog, type SettingsTab} from '../settings/SettingsDialog'
+import {playStoneSound} from '../board/sound'
 
 export function App() {
   const [game, setGame] = useState<GameContext | null>(null)
+  const current = useRef<GameContext | null>(null)
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
-  const [reply, setReply] = useState<Reply | null>(null)
-  const [question, setQuestion] = useState('')
+  const [history, setHistory] = useState<Conversation[]>([])
   const [preview, setPreview] = useState<Preview | null>(null)
-  const [previewId, setPreviewId] = useState<number | null>(null)
-  const [numbers, setNumbers] = useState(false)
-  const [settings, setSettings] = useState(false)
+  const [numbers, setNumbers] = useState<NumberMode>('off')
+  const [settings, setSettings] = useState<SettingsTab | null>(null)
+  const [left, setLeft] = useState(true)
+  const [right, setRight] = useState(true)
+  const [sound, setSound] = useState(true)
   const [busy, setBusy] = useState(false)
+  const [analyzing, setAnalyzing] = useState(false)
+  const [auto, setAuto] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-  const [engine, setEngine] = useState('待启动')
+  const [engine, setEngine] = useState('启动中')
   const running = useRef(false)
-  const clear = () => {setAnalysis(null); setReply(null); setQuestion(''); setPreview(null); setPreviewId(null)}
+  const analysisTicket = useRef(0)
+  const accept = useCallback((context: GameContext) => {
+    // Keep the tree's transport projection stable during ordinary navigation.
+    const previous = current.current
+    if (previous?.game_id === context.game_id && JSON.stringify(previous.nodes) === JSON.stringify(context.nodes)) context.nodes = previous.nodes
+    current.current = context; setGame(context)
+  }, [])
+  const clear = () => {setAnalysis(null); setPreview(null)}
+  const stopAnalysis = useCallback(async () => {
+    analysisTicket.current += 1; setAnalyzing(false)
+    await invoke('stopAnalysis')
+    accept(await invoke<GameContext>('state'))
+  }, [accept])
   const perform = useCallback(async (fn: () => Promise<void>) => {
     if (running.current) return
     running.current = true; setBusy(true); setError(''); setNotice('')
     try {await fn()} catch (e) {
       setError((e as Error).message.replace(/^Error invoking remote method '[^']+': Error: /, ''))
-      try {setGame(await invoke<GameContext>('state'))} catch {}
-    } finally {
-      running.current = false; setBusy(false)
-      try {const health = await invoke<{katago: string}>('health'); setEngine(health.katago === 'running' ? '已连接' : '待启动')} catch {setEngine('离线')}
-    }
+    } finally {running.current = false; setBusy(false)}
   }, [])
-  useEffect(() => {void perform(async () => setGame(await invoke<GameContext>('state')))}, [perform])
-  const open = () => perform(async () => {const result = await invoke<GameContext | null>('open'); if (result) {setGame(result); clear()}})
-  const save = (as = false) => perform(async () => {const result = await invoke<{filename: string} | null>(as ? 'saveAs' : 'save'); if (result) {setNotice(`已保存 ${result.filename}`); setGame(await invoke<GameContext>('state'))}})
-  const navigate = (direction: string, node_id?: string) => perform(async () => {setGame(await invoke<GameContext>('navigate', {direction, node_id})); clear()})
-  const analyze = () => perform(async () => {
-    if (!game) return
-    const result = await invoke<AnalysisResult>('analyze', {revision: game.revision})
-    clear(); setGame(result.context); setAnalysis(result.analysis)
+  useEffect(() => {
+    void perform(async () => {
+      accept(await invoke<GameContext>('state'))
+      const value = await invoke<Settings>('settings'); setSound(value.sound_enabled)
+      void invoke('startEngine').catch(e => setError(String(e)))
+    })
+    const poll = async () => {
+      try {
+        const health = await invoke<{katago: string}>('health')
+        setEngine(({starting: '启动中', ready: '就绪', error: '错误', stopped: '未启动'} as Record<string, string>)[health.katago] || '错误')
+      } catch {setEngine('错误')}
+    }
+    const timer = window.setInterval(() => void poll(), 1500)
+    return () => window.clearInterval(timer)
+  }, [perform, accept])
+  const open = () => perform(async () => {
+    await stopAnalysis()
+    const result = await invoke<GameContext | null>('open')
+    if (result) {accept(result); clear(); setHistory([])}
+  })
+  const save = (as = false) => perform(async () => {
+    const result = await invoke<{filename: string} | null>(as ? 'saveAs' : 'save')
+    if (result) {setNotice(`已保存 ${result.filename}`); accept(await invoke<GameContext>('state'))}
+  })
+  const navigate = useCallback((direction: string, node_id?: string) => {void perform(async () => {
+    await stopAnalysis(); setAnalysis(null); setPreview(null)
+    accept(await invoke<GameContext>('navigate', {direction, node_id}))
+  })}, [accept, perform, stopAnalysis])
+  const analyze = useCallback(async () => {
+    if (!current.current || running.current) return
+    await stopAnalysis()
+    const snapshot = current.current
+    const ticket = ++analysisTicket.current
+    setAnalyzing(true); setError('')
+    try {
+      const result = await invoke<AnalysisResult | {cancelled: true}>('analyze', {revision: snapshot.revision})
+      if (ticket !== analysisTicket.current || current.current?.revision !== snapshot.revision || 'cancelled' in result) return
+      accept(result.context); setAnalysis(result.analysis)
+    } catch (e) {if (ticket === analysisTicket.current) {setError((e as Error).message); setAuto(false)}}
+    finally {if (ticket === analysisTicket.current) setAnalyzing(false)}
+  }, [accept, stopAnalysis])
+  useEffect(() => {
+    if (!auto || !game || busy) return
+    const timer = window.setTimeout(() => void analyze(), 250)
+    return () => window.clearTimeout(timer)
+  }, [auto, game?.game_id, game?.node_id, busy, analyze])
+  const toggleAnalysis = () => {setAuto(value => !value); if (auto) void stopAnalysis()}
+  const play = (coordinate: string) => perform(async () => {
+    await stopAnalysis()
+    const snapshot = current.current
+    if (!snapshot) return
+    const result = await invoke<{context: GameContext; created: boolean}>('play', {coordinate, revision: snapshot.revision})
+    accept(result.context); clear()
+    if (result.created && coordinate !== 'pass' && sound) playStoneSound()
+  })
+  const edit = (action: string) => perform(async () => {
+    await stopAnalysis()
+    if (!current.current) return
+    accept(await invoke<GameContext>('edit', {action, revision: current.current.revision})); clear()
+  })
+  const comment = (text: string) => perform(async () => {
+    await stopAnalysis()
+    if (current.current) accept(await invoke<GameContext>('comment', {text, revision: current.current.revision}))
   })
   const showPreview = (id: number, full = false) => perform(async () => {
-    if (!game) return
-    setPreview(await invoke<Preview>('preview', {revision: game.revision, marker_id: id, full})); setPreviewId(id)
-  })
-  const select = (coordinate: string) => perform(async () => {
-    if (!game) return
-    const context = await invoke<GameContext>('select', {coordinate, revision: game.revision})
-    setGame(context); setReply(null); setQuestion(''); setPreview(null); setPreviewId(null)
-    const marker = context.markers.find(m => m.coordinate === coordinate)
-    // Free points become markers immediately; candidate clicks additionally open their analysis/PV.
-    if (marker && game.markers.some(m => m.coordinate === coordinate) && marker.role !== 'stone') {
-      const result = await invoke<AnalysisResult>('analyzeMarker', {revision: context.revision, marker_id: marker.id})
-      setAnalysis(old => old ? {...old, candidates: [...old.candidates.filter(c => c.coordinate !== coordinate), ...result.analysis.candidates]} : result.analysis)
-      setPreview(await invoke<Preview>('preview', {revision: context.revision, marker_id: marker.id})); setPreviewId(marker.id)
-    }
+    await stopAnalysis()
+    if (current.current) setPreview(await invoke<Preview>('preview', {revision: current.current.revision, marker_id: id, full}))
   })
   const ask = (text: string) => perform(async () => {
-    if (!game) return
-    setQuestion(text); setReply(null); setPreview(null); setPreviewId(null)
-    const result = await invoke<{reply: Reply; context: GameContext}>('ask', {question: text, revision: game.revision})
-    setReply(result.reply); setGame(result.context)
+    await stopAnalysis()
+    const snapshot = current.current
+    if (!snapshot) return
+    setPreview(null)
+    const entry = {question: text, move: snapshot.move_number, reply: null}
+    setHistory(old => [...old, entry])
+    const result = await invoke<{reply: Reply; context: GameContext}>('ask', {question: text, revision: snapshot.revision})
+    accept(result.context)
+    setHistory(old => [...old.slice(0, -1), {...entry, reply: result.reply}])
   })
-  const clearMarkers = () => perform(async () => {if (game) {setGame(await invoke<GameContext>('clearMarkers', {revision: game.revision})); clear()}})
   useEffect(() => {
     const handle = (action: string) => {
+      if (action === 'toggleAnalysis') {toggleAnalysis(); return}
       if (running.current || settings) return
       if (action === 'open') void open()
       if (action === 'save' || action === 'saveAs') void save(action === 'saveAs')
       if (action === 'analyze') void analyze()
-      if (action === 'clearMarkers') void clearMarkers()
-      if (action === 'settings') setSettings(true)
+      if (['undo', 'redo', 'deleteNode', 'deleteBranch'].includes(action)) void edit(action)
+      if (['engineSettings', 'apiSettings', 'interfaceSettings'].includes(action)) {
+        void stopAnalysis()
+        setSettings(action === 'engineSettings' ? 'engine' : action === 'apiSettings' ? 'api' : 'interface')
+      }
     }
     const unsubscribe = window.llmgo?.onMenu(handle)
     const key = (event: KeyboardEvent) => {
       if (settings || running.current || (event.target as HTMLElement).matches('input,textarea,select')) return
-      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {event.preventDefault(); void navigate(event.key === 'ArrowLeft' ? 'previous' : 'next')}
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {event.preventDefault(); navigate(event.key === 'ArrowLeft' ? 'previous' : 'next')}
     }
     window.addEventListener('keydown', key)
     return () => {unsubscribe?.(); window.removeEventListener('keydown', key)}
   })
-  const selected = game?.markers.find(m => m.coordinate === game.selected_move)?.id || null
   return <div className="app" onDragOver={event => event.preventDefault()} onDrop={event => {
     event.preventDefault(); if (settings) return
     const file = event.dataTransfer.files[0]
-    if (file) void perform(async () => {const context = await window.llmgo.openDropped(file); if (context) {setGame(context); clear()}})
+    if (file) void perform(async () => {await stopAnalysis(); const context = await window.llmgo.openDropped(file); if (context) {accept(context); clear(); setHistory([])}})
   }}>
-    <header className="topbar"><div className="brand"><span className="brand-symbol">●<i>○</i></span>LLMgo<span className="brand-caption">围棋 AI 助教</span></div>
-      <div className="toolbar"><button onClick={() => void open()} disabled={busy}>↥ 打开 SGF</button><button onClick={() => void save()} disabled={busy}>保存</button><span className="divider"/><button className="settings-button" onClick={() => setSettings(true)} disabled={busy}>⚙ 设置</button></div>
-    </header>
     {(error || notice) && <div className={`banner ${error ? 'error' : ''}`} role="alert"><span>{error || notice}</span><button aria-label="关闭提示" onClick={() => {setError(''); setNotice('')}}>×</button></div>}
-    {game ? <main className="workspace">
-      <aside className="game-panel"><div className="record-title"><span className="eyebrow">棋谱工作台</span><h2>{game.filename || '新的棋局'}</h2><span>{game.metadata.DT || '导入棋谱，开始一起复盘'}</span></div>
-        <div className="players"><div><i className="stone-dot"/><span><b>{game.metadata.PB || '黑方'}</b><small>{game.metadata.BR || '黑棋'}</small></span></div><div><i className="stone-dot white"/><span><b>{game.metadata.PW || '白方'}</b><small>{game.metadata.WR || '白棋'}</small></span></div></div>
-        <div className="game-meta"><span>{game.board_state.size} 路</span><span>贴 {game.metadata.KM || '7.5'} 目</span><span>{game.metadata.RU || '中国规则'}</span>{game.metadata.RE && <span>{game.metadata.RE}</span>}{game.metadata.HA && <span>让 {game.metadata.HA} 子</span>}</div>
-        <GameTree game={game} disabled={busy} onNavigate={(d, n) => void navigate(d, n)}/>
-        <div className="drop-hint">↧ 拖入 .sgf 文件打开棋谱</div>
+    {game ? <main className={`workspace ${left ? '' : 'left-collapsed'} ${right ? '' : 'right-collapsed'}`}>
+      <aside className="game-panel" hidden={!left}>
+        <div className="record-title"><span className="eyebrow">棋谱工作台</span><h2>{game.filename || '新的棋局'}</h2><span>{game.metadata.DT || ''}</span></div>
+        <div className="players"><div><i className="stone-dot"/><span><small>黑方</small><b>{game.metadata.PB || '未知'}</b></span></div><div><i className="stone-dot white"/><span><small>白方</small><b>{game.metadata.PW || '未知'}</b></span></div></div>
+        <div className="game-meta"><span>{game.board_state.size} 路</span><span>贴 {game.metadata.KM || '7.5'} 目</span><span>{game.metadata.RU || '中国规则'}</span><span>{game.metadata.game_form}</span>{game.metadata.RE && <span>{game.metadata.RE}</span>}</div>
+        <GameTree game={game} disabled={busy} onNavigate={navigate} onComment={text => void comment(text)}/>
+        <div className="drop-hint">拖入 .sgf 文件打开棋谱</div>
       </aside>
-      <section className="board-panel"><div className="board-heading"><div><span className="eyebrow">{preview ? '变化预览' : '当前局面'}</span><h1>{preview ? `候选 ${previewId || selected || ''} 的变化` : `第 ${game.move_number} 手`}<span>{preview ? '数字代表变化手顺' : game.to_play === 'B' ? '黑棋行棋' : '白棋行棋'}</span></h1></div><button className="primary" disabled={busy} onClick={() => void analyze()}>{busy ? '处理中…' : '✧ 分析局面'}</button></div>
-        <div className="board-options"><label><input type="checkbox" checked={numbers} onChange={e => setNumbers(e.target.checked)} disabled={!!preview}/>手数</label><span>{preview ? '预览不改变棋谱' : '点击空点或棋子添加数字标记'}</span><button className="text-button" disabled={busy} onClick={() => void clearMarkers()}>清除标记</button></div>
-        <Board game={game} preview={preview} busy={busy} numbers={numbers} onPoint={c => void select(c)}/>
-        {preview ? <div className="preview-bar"><span>变化：{preview.steps.map(s => `${s.id}${s.coordinate === 'pass' ? ' 停一手' : ''}`).join(' → ')}</span>{previewId && <button disabled={busy} onClick={() => void showPreview(previewId, true)}>完整变化</button>}<button onClick={() => setPreview(null)}>返回当前局面</button></div>
-          : <div className="navigation"><button aria-label="第一手" disabled={busy} onClick={() => void navigate('first')}>|‹</button><button aria-label="前一手" disabled={busy} onClick={() => void navigate('previous')}>‹</button><span>第 <b>{game.move_number}</b> 手</span><button aria-label="后一手" disabled={busy} onClick={() => void navigate('next')}>›</button><button aria-label="最后一手" disabled={busy} onClick={() => void navigate('last')}>›|</button></div>}
-        <Candidates game={game} analysis={analysis} disabled={busy} onSelect={c => void select(c)} onPreview={id => void showPreview(id)}/>
+      <section className="board-panel">
+        <div className="board-heading"><button className="sidebar-toggle" aria-label={left ? '折叠棋谱栏' : '展开棋谱栏'} onClick={() => setLeft(!left)}>{left ? '‹' : '›'}</button><div><span className="eyebrow">{preview ? 'KataGo 变化预览' : '当前局面'}</span><h1>第 {game.move_number} 手<span>{game.to_play === 'B' ? '黑棋行棋' : '白棋行棋'}</span></h1></div><button className="sidebar-toggle" aria-label={right ? '折叠 AI 栏' : '展开 AI 栏'} onClick={() => setRight(!right)}>{right ? '›' : '‹'}</button></div>
+        <div className="board-options"><button disabled={!!preview} onClick={() => setNumbers(nextNumberMode(numbers))}>手数：{({off: '关闭', latest: '最新', all: '全部'})[numbers]}</button><button disabled={busy} onClick={() => void analyze()}>分析当前局面</button><button onClick={toggleAnalysis}>{auto ? '停止分析' : '启动分析'}</button><span>{analyzing ? '分析中…' : ''}</span></div>
+        <Board game={game} preview={preview} busy={busy} numbers={numbers} onPoint={c => void play(c)}/>
+        {preview ? <div className="preview-bar"><span>预览手顺，不写入棋谱</span><button onClick={() => setPreview(null)}>返回当前局面</button></div>
+          : <div className="navigation"><button aria-label="第一手" disabled={busy} onClick={() => navigate('first')}>|‹</button><button aria-label="前一手" disabled={busy} onClick={() => navigate('previous')}>‹</button><span>第 <b>{game.move_number}</b> 手</span><button aria-label="后一手" disabled={busy} onClick={() => navigate('next')}>›</button><button aria-label="最后一手" disabled={busy} onClick={() => navigate('last')}>›|</button><button className="pass" disabled={busy} onClick={() => void play('pass')}>停一手</button></div>}
+        <Candidates game={game} analysis={analysis} disabled={busy} onPreview={id => void showPreview(id)}/>
       </section>
-      <Teacher reply={reply} question={question} busy={busy} selected={selected} onAsk={text => void ask(text)} onPreview={() => {setPreview(reply?.preview || null); setPreviewId(null)}}/>
+      <Teacher history={history} busy={busy} hidden={!right} onAsk={text => void ask(text)}/>
     </main> : <div className="loading">正在连接 Python Core…</div>}
-    <footer className="statusbar"><span><i className={`status-dot ${engine === '已连接' ? '' : 'idle'}`}/>KataGo {engine}</span><span>第 {game?.move_number || 0} 手</span><span>目差 {analysis ? score(analysis.score_lead) : '—'}</span><span>胜率 {analysis ? percent(analysis.winrate) : '—'}</span><span>Visits {analysis?.visits ?? '—'}</span><span className="status-right">{analysis ? `${analysis.perspective === 'B' ? '黑' : '白'}方视角${analysis.cached ? ' · 缓存' : ''}` : '本地棋谱 · 数字讲解'}</span></footer>
-    {settings && <SettingsDialog onClose={() => setSettings(false)} onSaved={() => {clear(); void invoke<GameContext>('state').then(setGame).catch(e => setError(String(e)))}}/>}
+    <footer className="statusbar"><span><i className={`status-dot ${engine === '就绪' ? '' : 'idle'}`}/>KataGo {engine}</span><span>第 {game?.move_number || 0} 手</span><span>目差 {analysis ? score(analysis.score_lead) : '—'}</span><span>胜率 {analysis ? percent(analysis.winrate) : '—'}</span><span>Visits {analysis?.visits ?? '—'}</span><span className="status-right">{analysis ? `${analysis.perspective === 'B' ? '黑' : '白'}方视角` : ''}</span></footer>
+    {settings && <SettingsDialog initialTab={settings} onClose={() => setSettings(null)} onSaved={value => {setSound(value.sound_enabled); clear(); void invoke<GameContext>('state').then(accept).catch(e => setError(String(e)))}}/>}
   </div>
 }

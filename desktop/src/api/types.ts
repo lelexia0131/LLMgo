@@ -1,11 +1,12 @@
-export interface Marker {id: number; coordinate: string; role: 'best_move' | 'candidate' | 'selected_move' | 'stone'}
+export interface Marker {id: number; coordinate: string; role: 'best_move' | 'candidate'}
 export interface Move {color: 'B' | 'W'; coordinate: string}
 export interface GameNode {id: string; parent_id: string | null; children: string[]; move: Move | null; comment: string; move_number: number}
 export interface GameContext {
   game_id: string; node_id: string; revision: number; move_number: number; to_play: 'B' | 'W'
   board_state: {size: number; sign_map: number[][]; last_move: string | null; move_numbers: number[][]}
-  selected_move: string | null; markers: Marker[]; metadata: Record<string, string>; nodes: GameNode[]
+  markers: Marker[]; metadata: Record<string, string>; nodes: GameNode[]
   comment: string; filename: string | null
+  can_undo: boolean; can_redo: boolean; move_losses: Record<string, number>
 }
 export interface Candidate {coordinate: string; score_lead: number; winrate: number; visits: number; prior: number; pv: string[]}
 export interface Analysis {score_lead: number; winrate: number; visits: number; perspective: 'B' | 'W'; candidates: Candidate[]; cached: boolean}
@@ -19,6 +20,8 @@ export interface Engine {name: string; executable: string; models: string[]; con
 export interface Settings {
   katago_executable: string; katago_model: string; katago_config: string; visits: number; openai_model: string
   has_api_key: boolean; engines: Engine[]
+  provider: 'openai' | 'deepseek' | 'compatible'; base_url: string; sound_enabled: boolean
+  engine_threads: number; engine_gpu: number
 }
 declare global {
   interface Window {llmgo: {

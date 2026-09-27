@@ -34,7 +34,7 @@ def create_tools(ctx: TeachingContext) -> list[FunctionTool]:
         return {'game_id': ctx.game.game_id, 'node_id': ctx.game.node_id,
                 'move_number': ctx.game.move_number, 'to_play': ctx.game.to_play,
                 'move_history': [m.model_dump() for m in ctx.game.move_history],
-                'selected_move': ctx.game.selected_move, 'metadata': ctx.game.metadata,
+                'metadata': ctx.game.metadata,
                 'board_state': ctx.game.board_state.model_dump(),
                 'current_markers': [m.model_dump() for m in ctx.game.markers]}
 
@@ -56,12 +56,11 @@ def create_tools(ctx: TeachingContext) -> list[FunctionTool]:
 
     @function_tool
     async def analyze_marker(marker_id: int) -> dict:
-        """分析数字标记对应落点；若指向已有棋子，分析其所在的当前局面。"""
+        """分析 KataGo 推荐数字对应的落点。"""
         ctx.calls.append(f'analyze_marker({marker_id})')
         marker = ctx.marker(marker_id)
-        result = await ctx.analysis.analyze_position(ctx.game) if marker.role == 'stone' else await ctx.analysis.analyze_move(ctx.game, marker.coordinate)
-        return {**ctx.evidence(result), 'target_marker': marker.id, 'target_role': marker.role,
-                'limitation': '全局结果不能证明单块棋的死活' if marker.role == 'stone' else ''}
+        result = await ctx.analysis.analyze_move(ctx.game, marker.coordinate)
+        return {**ctx.evidence(result), 'target_marker': marker.id, 'target_role': marker.role}
 
     @function_tool
     async def compare_markers(marker_ids: list[int]) -> list[dict]:
@@ -69,8 +68,6 @@ def create_tools(ctx: TeachingContext) -> list[FunctionTool]:
         if not 2 <= len(set(marker_ids)) <= 5:
             raise ValueError('请选择 2 到 5 个不同标记')
         markers = [ctx.marker(i) for i in marker_ids]
-        if any(m.role == 'stone' for m in markers):
-            raise ValueError('已有棋子不能作为候选落点比较')
         ctx.calls.append('compare_markers(' + ','.join(map(str, marker_ids)) + ')')
         return [ctx.evidence(r) for r in await ctx.analysis.compare_moves(ctx.game, [m.coordinate for m in markers])]
 

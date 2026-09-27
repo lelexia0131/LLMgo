@@ -32,4 +32,4 @@ class Move(BaseModel):
 class BoardMarker(BaseModel):
     id: int
     coordinate: str
-    role: Literal['best_move', 'candidate', 'selected_move', 'stone']
+    role: Literal['best_move', 'candidate']

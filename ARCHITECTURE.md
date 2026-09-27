@@ -20,7 +20,7 @@ flowchart TD
   Analysis --> Client[KataGoClient]
   Client --> Process[KataGoProcess]
   Process --> Engine[KataGo JSON Analysis Engine]
-  Teacher --> OpenAI[官方 OpenAI API]
+  Teacher --> Provider[LLMProvider / Responses or Chat Completions]
 ```
 
 核心调用链：
@@ -41,7 +41,7 @@ flowchart LR
 - `desktop/electron/preload`：contextBridge 白名单；无任意 URL、shell、读写文件接口。
 - `backend/api`：Pydantic 入参、调用 Service、单会话操作锁。
 - `backend/domain`：Game、GameNode、Move、BoardState、GameContext、业务分析模型，无 UI 依赖。
-- `backend/services/game_service.py`：当前棋谱状态、导航、Marker 编号和 revision 校验。
+- `backend/services/game_service.py`：当前棋谱状态、导航、真实落子/编辑/撤销、分析推荐编号和 revision 校验。
 - `backend/services/file_service.py`：仅 SGF 打开/原子保存。
 - `backend/services/analysis_service.py`：分析局面、指定点、比较、PV、视角统一及缓存；所有上层共享此实例。
 - `backend/services/agent_service.py`：单次提问快照、单个 TeacherAgent、请求取消、真实 GPT 测试。
@@ -60,12 +60,14 @@ flowchart LR
 底层保存 GTP 标准坐标，UI/问题优先使用数字。映射权威在 GameService，前端只展示和提交意图。
 
 - 当前分析生成前三候选的 1、2、3；新分析替换旧标记。
-- 自由点选分配下一个数字，已有棋子使用 `stone` 角色。
-- 导航、打开棋谱、变更引擎、清除标记都会递增 revision 并清空标记。
+- 棋盘空点点击创建真实 B/W 节点；用户操作不创建临时标记。已有相同后续则导航，否则追加 variation。
+- 导航、打开棋谱、落子、变更引擎都会递增 revision 并清空标记。
 - 提问复制当前局面及 `current_markers`；沿用本问题已引用目标的编号，工具只在快照内追加空闲编号，上限五个。提问完成后同步回棋盘。
 - API 请求必须携带 revision，拒绝过期标记；操作锁避免导航、分析、设置同时修改同一会话。
 - PV 数字是另一个视图的手顺，页面明确显示“候选 N 的变化”，退出预览恢复原标记；默认五手，用户请求完整变化后才扩展。
-- 教学已有棋子依靠选中的数字标记；全局证据不能推导单块棋的确定死活。
+- 推荐编号只用于分析证据；真实手数由 SGF 路径推导。全局证据不能推导单块棋的确定死活。
+- 撤销记录是序列化 SGF 快照、节点 ID 序列和 current node，不维护第二棵棋谱树。正常编辑保留原节点 ID，Renderer 复用树投影及 keyed DOM。
+- Provider 共用同一个 TeacherAgent / 工具 / 证据逻辑；OpenAI 使用 Responses，DeepSeek 与兼容服务使用 Chat Completions。兼容服务最终 JSON 由本地 schema 验证，不要求服务端支持 strict structured output。
 
 ## 分析事实
 
@@ -79,9 +81,9 @@ flowchart LR
 
 主要 API：`GET /health`、`POST /game/open`、`POST /game/save`、`GET /game/state`、`POST /game/navigate`、`POST /analysis/current`、`POST /analysis/marker`、`POST /agent/ask`、`GET/POST /settings`、`POST /settings/test-katago`、`POST /settings/test-openai`。
 
-辅助接口：`/game/select`、`/game/clear-markers`、`/analysis/preview`。Main 专用 `/settings/credential` 与 `/shutdown` 不在 Renderer 操作白名单。所有接口都要求 Main 生成的随机 token，绑定 127.0.0.1，不开放 CORS、API 文档或任意文件系统/shell/引擎透传。
+编辑接口：`/game/play`、`/game/edit`、`/game/comment`；引擎接口：`/engine/start`、`/engine/restart`；分析支持 `/analysis/stop` 与 `/analysis/preview`。Main 专用 `/settings/credential` 与 `/shutdown` 不在 Renderer 操作白名单。所有接口都要求 Main 生成的随机 token，绑定 127.0.0.1，不开放 CORS、API 文档或任意文件系统/shell/引擎透传。
 
-Main → 启动 Core → 等待 health → 加载 UI。KataGo 首次分析时按设置启动；切换引擎先关闭旧进程。退出先取消 Agent，关闭 KataGo 的 stdin 并等待，必要时 kill，随后结束 Python。Windows 最终以已知 Core PID 结束其进程树；Python 父进程监视器处理 Main 意外结束。
+Main → 启动 Core → 等待 health → 加载 UI。Renderer ready 后请求 `/engine/start`，后台初始化任务复用 KataGoClient 的启动锁；完成一次搜索后为 ready。初始化不占用棋谱操作锁；切换引擎先取消请求并关闭旧进程。退出先取消 Agent，关闭 KataGo 的 stdin 并等待，必要时 kill，随后结束 Python。Windows 最终以已知 Core PID 结束其进程树；Python 父进程监视器处理 Main 意外结束。
 
 ## 明确禁止
 
