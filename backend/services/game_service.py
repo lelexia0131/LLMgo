@@ -1,4 +1,4 @@
-from backend.domain.context import GameContext
+from backend.domain.context import GameContext, GameSnapshot
 from backend.domain.move import BoardMarker, point
 from backend.sgf.adapter import SGFAdapter
 from sgfmill import boards, sgf
@@ -87,6 +87,10 @@ class GameService:
 
     def snapshot(self) -> EditSnapshot:
         return EditSnapshot(self.adapter.serialize(), list(self.adapter.refs), self.adapter.game.current_node)
+
+    def review_snapshot(self) -> GameSnapshot:
+        return GameSnapshot(current=self.context().model_copy(deep=True),
+                            sgf_data=self.adapter.serialize(), node_ids=list(self.adapter.refs))
 
     def remember(self) -> None:
         self.undo_stack.append(self.snapshot())

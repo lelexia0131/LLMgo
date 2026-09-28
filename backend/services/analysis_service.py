@@ -80,8 +80,9 @@ class AnalysisService:
                                   visits=response.rootInfo.visits, perspective=context.to_play,
                                   candidates=[CandidateMove(coordinate=m.move, score_lead=m.scoreLead * (1 if black else -1),
                                                             winrate=m.winrate if black else 1 - m.winrate,
-                                                            visits=m.visits, prior=m.prior, pv=m.pv)
-                                              for m in sorted(response.moveInfos, key=lambda m: m.order)],
+                                                            visits=m.visits, prior=m.prior, pv=m.pv, order=m.order)
+                                              for m in sorted(response.moveInfos, key=lambda m: m.order if m.order is not None else float('inf'))],
+                                  allowed_moves=list(allowed or []),
                                   ownership=response.ownership, policy=response.policy, human_policy=response.humanPolicy)
         if len(self.cache) >= 128:
             self.cache.pop(next(iter(self.cache)))

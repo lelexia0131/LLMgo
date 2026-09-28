@@ -29,7 +29,7 @@ npm run dev
 6. APP 启动即后台初始化 KataGo。“引擎设置”选择 executable、model、config、backend、GPU、threads 和 visits，可重启并查看日志。GPU / threads 默认沿用原配置；覆盖值写入用户数据目录中的派生配置，不改原文件。
 7. F5 分析当前局面；F6 启停跟随节点的自动分析。KataGo 推荐在交叉点直接显示胜率与目差，颜色使用相对最优候选的目差损失；左键推荐点仍为真实落子，右键预览 PV。分析与 PV 切换保持棋盘尺寸不变。
 8. “AI / API 设置”支持 OpenAI、DeepSeek、OpenAI Compatible，可修改 Base URL 和 Model，使用原生凭据窗口配置 Key，再测试连接。
-9. 右栏保留对话历史；每个问题基于当前局面独立查询证据，历史项标注手数和对应推荐坐标，不提供跨局面模型记忆。
+9. 右栏保留对话历史；每个问题基于提问时的棋谱快照独立查询证据，可问“这手为什么不好”或指定历史手数。实战着复盘使用落子前候选与单独搜索，返回损失、前后评价和 PV；不在返回候选中的实战着不会编造排名。目前仍不提供跨轮模型会话记忆。
 
 原生菜单支持 Ctrl+O / Ctrl+S / Ctrl+Shift+S、Ctrl+Z / Ctrl+Shift+Z。聊天 Enter 发送，Shift+Enter 换行。用户新增落子才异步播放真实落子采样（pass、导航和 PV 无声），可在“界面设置”关闭。音频来源及 MIT 许可见 [stone.SOURCE.md](assets/stone.SOURCE.md)。侧栏宽度在当前会话内保留。
 
@@ -50,7 +50,8 @@ Windows 原生密码窗口由 Electron Main 打开，Renderer 无密钥输入框
 - sgfmill 负责 SGF 解析、树结构、摆子、提子及序列化；保留 variations 和原始属性。支持 19/13/9 路，包含 SZ/PB/PW/BR/WR/KM/RU/RE/DT/HA/AB/AW/B/W/C。
 - Python Game / GameNode / Move / BoardState / GameContext；中途 SGF 摆子重建有效引擎历史。
 - 明确分离 KataGoProcess、KataGoClient、AnalysisService；请求路由、队列、取消、超时、schema 验证；128 项内存缓存。
-- TeacherAgent 的五个函数工具仅调用 Service；紧凑 PositionEvidence，不直接传原始引擎 JSON。
+- TeacherAgent 的六个函数工具仅调用 Service；PositionEvidence 保留全部返回候选，Marker 仅用于可选的 UI 引用，不直接传原始引擎 JSON。
+- ReviewService 提供 PositionReview / MoveReview；`inspect_move` 基于保留节点 ID 的棋谱快照复盘实战着，所有数值统一为实战行棋方视角。
 - 局面 revision 校验、可取消分析、当前问题快照；KataGo 推荐数字与 SGF 手数分开。
 - Main 启动 Python 后等待 health；正常退出取消 Agent、关闭 KataGo，再结束 Python。Python 监视父进程，防止主进程异常退出后持续后台运行。
 
@@ -59,7 +60,7 @@ SGF 保存保留主线、变化、摆子、pass、注释和元数据。编辑直
 ## 构建与检查
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q tests/test_workbench.py tests/test_core.py -k "not katago_schema"
+.\.venv\Scripts\python.exe -m pytest -q
 npm run build
 .\.venv\Scripts\python.exe -m scripts.real_smoke
 npm run test:desktop

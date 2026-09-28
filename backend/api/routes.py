@@ -129,7 +129,8 @@ def create_routes(game: GameService, files: FileService, analysis: AnalysisServi
         async with operation:
             game.check(body.revision)
             # Rebuild a fresh question context while preserving IDs referenced in the question.
-            reply = await agent.ask(game.context(), body.question)
+            snapshot = game.review_snapshot()
+            reply = await agent.ask(snapshot.current, body.question, snapshot=snapshot)
             game.revision += 1
             game.markers = reply.current_markers
             return {'reply': reply, 'context': game.context()}

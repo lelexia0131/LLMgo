@@ -70,7 +70,7 @@ def test_katago_schema_rejects_invalid_winrate_and_accepts_extensions():
         AnalysisResponse.model_validate(raw)
 
 
-def test_evidence_only_contains_mapped_candidates():
+def test_evidence_keeps_candidates_without_markers():
     game = GameService()
     ctx = game.set_candidates(['R12', 'Q10'], 0)
     result = PositionAnalysis(score_lead=2.3, winrate=.58, visits=100, perspective='B', candidates=[
@@ -78,8 +78,14 @@ def test_evidence_only_contains_mapped_candidates():
         for c, score in [('R12', 2.3), ('Q10', -1.2), ('C6', 0)]])
     evidence = build_evidence(ctx, result)
     assert evidence.best_marker == 1
-    assert [c.marker for c in evidence.candidates] == [1, 2]
-    assert 'pv' not in evidence.model_dump_json()
+    assert [c.marker for c in evidence.candidates] == [1, 2, None]
+    assert evidence.candidates[2].pv == ['C6']
+    assert evidence.best_move == 'R12'
+    assert evidence.node_id == ctx.node_id
+    ctx.markers = []
+    unmarked = build_evidence(ctx, result)
+    assert len(unmarked.candidates) == 3
+    assert unmarked.best_marker is None
 
 
 def test_api_auth_sgf_and_secret_redaction(tmp_path, monkeypatch):

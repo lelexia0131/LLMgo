@@ -22,3 +22,9 @@ class GameContext(BaseModel):
     can_undo: bool = False
     can_redo: bool = False
     move_losses: dict[str, float] = Field(default_factory=dict)
+
+
+class GameSnapshot(BaseModel):
+    current: GameContext
+    sgf_data: bytes
+    node_ids: list[str]

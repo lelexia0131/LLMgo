@@ -15,8 +15,10 @@ flowchart TD
   File --> Files[SGF 文件读写]
   Settings --> Persistence[JSON Settings Persistence]
   Agent --> Teacher[TeacherAgent · SDK Runner]
-  Teacher --> Tools[五个函数工具]
+  Teacher --> Tools[六个函数工具]
   Tools --> Analysis
+  Tools --> Review[ReviewService]
+  Review --> Analysis
   Analysis --> Client[KataGoClient]
   Client --> Process[KataGoProcess]
   Process --> Engine[KataGo JSON Analysis Engine]
@@ -45,12 +47,14 @@ flowchart LR
 - `backend/services/file_service.py`：仅 SGF 打开/原子保存。
 - `backend/services/analysis_service.py`：分析局面、指定点、比较、PV、视角统一及缓存；所有上层共享此实例。
 - `backend/services/agent_service.py`：单次提问快照、单个 TeacherAgent、请求取消、真实 GPT 测试。
+- `backend/services/review_service.py`：PositionReview / MoveReview；根据棋谱快照还原指定节点的前后局面，组织候选、实战着搜索与统一视角的评价和损失。
+- `backend/services/reference_mapper.py`：为当前局面候选分配可选的 UI 编号，不过滤分析证据。
 - `backend/services/settings_service.py`：设置读写、引擎发现、密钥内存状态。
 - `backend/katago/process.py`：spawn / stdin / stdout / stderr / shutdown / crash。
 - `backend/katago/client.py`：ID、有限并发队列、路由、校验、超时、terminate 请求。
 - `backend/sgf/adapter.py`：成熟 sgfmill 与业务模型间的适配，保留原树。
-- `backend/agent`：提示、五个工具定义、结构化输出。工具闭包注入 AnalysisService，不持有 Process 或 Client。
-- `backend/evidence`：业务分析 → PositionEvidence；无原始 KataGo JSON 进入 GPT。
+- `backend/agent`：提示、六个工具定义、结构化输出。工具闭包调用 AnalysisService / ReviewService，不持有 Process 或 Client。
+- `backend/evidence`：业务分析 → PositionEvidence / MoveReviewEvidence；全部返回候选、prior、PV 和搜索顺序可进入证据，Marker 可为空。无原始 KataGo JSON 进入 GPT。
 - `backend/persistence`：非密钥 JSON 设置。
 
 所有可变棋局、设置和缓存均属于 `create_app()` 创建的 Service 实例，没有 Python 模块级共享可变棋局。依赖只从 API / Service 向 Domain / Infrastructure 延伸。
@@ -67,7 +71,7 @@ flowchart LR
 - PV 数字是另一个视图的手顺，棋盘内浮动按钮标示 PV 预览，退出预览恢复原推荐叠加层；默认五手，用户请求完整变化后才扩展。
 - 推荐胜率/目差通过独立的无指针事件叠加层绘制到 Shudan 交叉点；右键调用原有 PV 接口，左键始终提交真实落子。候选色阶与变化树共享颜色表，使用当前行棋方视角的 `max(candidate.score_lead) - candidate.score_lead`，下限为零。
 - 手数模式由 Settings 的 `move_number_mode` 持久化；F4 和界面设置更新同一 Renderer 状态并串行写入 Settings。
-- 推荐编号只用于分析证据；真实手数由 SGF 路径推导。全局证据不能推导单块棋的确定死活。
+- 推荐编号只用于 UI 引用，不决定 Agent 可读取哪些候选；已有棋子和历史落子可通过颜色、坐标和手数引用。真实手数由 SGF 路径推导。全局证据不能推导单块棋的确定死活。
 - 撤销记录是序列化 SGF 快照、节点 ID 序列和 current node，不维护第二棵棋谱树。正常编辑保留原节点 ID，Renderer 复用树投影及 keyed DOM。
 - Provider 共用同一个 TeacherAgent / 工具 / 证据逻辑；OpenAI 使用 Responses，DeepSeek 与兼容服务使用 Chat Completions。兼容服务最终 JSON 由本地 schema 验证，不要求服务端支持 strict structured output。
 
@@ -76,6 +80,10 @@ flowchart LR
 引擎进程显式统一为 BLACK 视角，AnalysisService 转成当前行棋方视角。候选的 winrate / scoreLead / visits / prior / pv 进入业务模型；ownership / policy / humanPolicy 预留字段但默认不请求。
 
 指定着使用 `allowMoves` 限制根节点，确保冷门用户落点得到真实搜索；比较逐个分析同一局面的候选，避免把未搜索落点当成结果。保留起始摆子、走子历史、rules、komi 和行棋方；中途摆子从该设置节点重新建立引擎历史。
+
+`inspect_move` 使用提问时保存的 SGF、稳定节点 ID 与 revision，复盘当前或指定的已落子节点。before / after 均转为实战行棋方视角；score_loss / winrate_loss 来自落子前首选与实战着的候选评价差，不以相邻局面的独立搜索差代替。实战着缺席时单独用 `allowMoves` 搜索，但状态仍为 `outside_returned_candidates`，排名为空。只有原始非受限候选的 order 连续完整时才返回精确排名；局面证据同时标明 allowed_moves，受限搜索的顺序不代表全局排名。
+
+当前完成重构方案的第 1–2 步。全盘两阶段复盘、自然正文 UI、会话上下文、SQLite 历史与学习记忆尚未实现；`/agent/ask` 仍持有操作锁，短锁运行及过期结果合并留待后续阶段。
 
 内存缓存最多 128 项。键包含引擎/模型/config 路径、完整初始局面、走子历史、规则、贴目、行棋方、visits 和落点限制。变更设置关闭旧进程并清空缓存。
 

@@ -31,7 +31,8 @@ async def main(openai: bool) -> None:
         ctx = game.set_candidates([c.coordinate for c in result.candidates[:3]], game.revision)
         cached = await analysis.analyze_position(ctx)
         assert cached.cached
-        teaching = TeachingContext(ctx, analysis)
+        snapshot = game.review_snapshot()
+        teaching = TeachingContext(ctx, analysis, snapshot=snapshot)
         tools = {t.name: t for t in create_tools(teaching)}
         wrapper = ToolContext(context=None, tool_name='analysis_smoke', tool_call_id='smoke', tool_arguments='{}')
         evidence = await tools['analyze_marker'].on_invoke_tool(wrapper, json.dumps({'marker_id': 2}))
@@ -40,6 +41,10 @@ async def main(openai: bool) -> None:
         assert len(comparison) == 2
         variation = await tools['analyze_variation'].on_invoke_tool(wrapper, json.dumps({'marker_id': 2}))
         assert variation['variation']['steps'][0]['coordinate'] == ctx.markers[1].coordinate
+        review = await tools['inspect_move'].on_invoke_tool(wrapper, json.dumps({'node_id': None}))
+        assert review['node_id'] == ctx.node_id and review['actual_move_analysis']['visits'] > 0
+        assert review['perspective'] == next(n.move.color for n in snapshot.current.nodes if n.id == ctx.node_id)
+        report['move_review'] = review
         game.reset_markers()
         free = next(f'{"ABCDEFGHJKLMNOPQRST"[x]}{19-y}' for y, row in enumerate(ctx.board_state.sign_map) for x, sign in enumerate(row) if sign == 0 and 3 <= x <= 15 and 3 <= y <= 15)
         free_result = await analysis.analyze_move(game.context(), free)
@@ -50,7 +55,7 @@ async def main(openai: bool) -> None:
                        'sdk_tools_real_katago': teaching.calls, 'played_move': free, 'cache': 'passed'})
         if openai:
             report['openai'] = await agent.test()
-            reply = await agent.ask(ctx, '为什么 2 不好？请通过工具与首选比较，不要先入为主。')
+            reply = await agent.ask(ctx, '为什么 2 不好？请通过工具与首选比较，不要先入为主。', snapshot=snapshot)
             assert any(c.startswith('analyze_marker(2)') for c in reply.tool_calls)
             assert any(c.startswith('compare_markers') for c in reply.tool_calls)
             report['agent'] = reply.model_dump()

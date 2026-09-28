@@ -9,7 +9,7 @@ class MoveInfo(BaseModel):
     visits: int = Field(ge=0)
     prior: float = Field(ge=0, le=1)
     pv: list[str]
-    order: int = 0
+    order: int | None = None
 
 
 class RootInfo(BaseModel):

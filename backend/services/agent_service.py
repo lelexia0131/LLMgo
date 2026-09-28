@@ -5,7 +5,7 @@ from openai import AsyncOpenAI, OpenAIError, APIConnectionError, APIStatusError
 from backend.agent.schemas import AgentReply, TeacherAnswer
 from backend.agent.teacher import create_teacher
 from backend.agent.tools import TeachingContext
-from backend.domain.context import GameContext
+from backend.domain.context import GameContext, GameSnapshot
 from backend.services.analysis_service import AnalysisService
 from backend.services.settings_service import SettingsService
 from backend.agent.provider import LLMProvider
@@ -20,13 +20,13 @@ class AgentService:
     def client(self) -> AsyncOpenAI:
         return self.provider.client()
 
-    async def ask(self, game: GameContext, question: str) -> AgentReply:
+    async def ask(self, game: GameContext, question: str, snapshot: GameSnapshot | None = None) -> AgentReply:
         task = asyncio.current_task()
         assert task is not None
         self.tasks.add(task)
         try:
             async with self.client() as client:
-                context = TeachingContext(game=game.model_copy(deep=True), analysis=self.analysis)
+                context = TeachingContext(game=game.model_copy(deep=True), analysis=self.analysis, snapshot=snapshot)
                 teacher = create_teacher(context, client, self.provider)
                 async with asyncio.timeout(300):
                     result = await Runner.run(teacher, question, max_turns=14,

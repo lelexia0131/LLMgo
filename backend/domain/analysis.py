@@ -9,6 +9,7 @@ class CandidateMove(BaseModel):
     visits: int
     prior: float
     pv: list[str]
+    order: int | None = None
 
 
 class PositionAnalysis(BaseModel):
@@ -17,6 +18,7 @@ class PositionAnalysis(BaseModel):
     visits: int
     perspective: Color
     candidates: list[CandidateMove]
+    allowed_moves: list[str] = Field(default_factory=list)
     ownership: list[float] | None = None
     policy: list[float] | None = None
     human_policy: list[float] | None = None
